@@ -1,7 +1,7 @@
 import { DEFAULT_RULES, LEAD_FIELDS, createAdRecord } from './data-model.js';
 import { importAdFiles } from './excel-import.js';
 import { readLeadFiles, suggestedMapping, mapLeadFiles, matchLeadsToAds } from './lead-import.js';
-import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroups, leadMetrics, classifyLead } from './metrics.js';
+import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroups, leadMetrics, classifyLead, averageFrequency, frequencySignals } from './metrics.js';
 import { diagnose, RISK_ORDER } from './diagnosis.js';
 import { renderCharts } from './charts.js';
 import { downloadCsv } from './export.js';
@@ -108,12 +108,17 @@ function groupQuality(group) {
 
 function diagnostics() {
   return diagnosticGroups(selectedAds())
-    .map(group => ({
-      ...group,
-      quality: groupQuality(group),
-      d: diagnose(group, state.rules, groupQuality(group)),
-      local: state.actions[group.id] || ''
-    }))
+    .map(group => {
+      const quality = groupQuality(group);
+      const frequency = frequencySignals(group.rows, state.rules.excellentCpl);
+      return {
+        ...group,
+        ...frequency,
+        quality,
+        d: diagnose(group, state.rules, quality, frequency.signals),
+        local: state.actions[group.id] || ''
+      };
+    })
     .sort((a, b) => RISK_ORDER[a.d.level] - RISK_ORDER[b.d.level] || b.spend - a.spend);
 }
 
@@ -192,18 +197,23 @@ function renderListToggle(id, key, total, { noun = '条', expandLabel = '展开�
 function adviceItems(items) {
   const counts = riskCounts(items);
   const best = items.find(item => item.d.level === 'excellent');
+  const hasCategory = (item, category) => (item.d.categories || [item.d.category]).includes(category);
+  const fatigueCount = items.filter(item => hasCategory(item, 'creativeFatigue')).length;
+  const saturationCount = items.filter(item => hasCategory(item, 'audienceSaturation')).length;
+  const fatigueHighCount = items.filter(item => item.d.level === 'high' && hasCategory(item, 'creativeFatigue')).length;
+  const signalMeta = [fatigueCount ? `${fatigueCount} 个素材疲劳提醒` : '', saturationCount ? `${saturationCount} 个受众趋于饱和提醒` : ''].filter(Boolean).join(' · ');
   return [
     {
       kind: 'critical', filter: 'critical', icon: '!', label: '优先处理',
       title: `${counts.extreme + counts.high} 个广告需要优先处理`,
-      meta: `${counts.extreme} 个极高风险 · ${counts.high} 个高风险`,
-      text: '存在持续消耗但没有 Lead、CPL 过高或转化异常的广告，建议优先检查素材、受众、表单和落地页。'
+      meta: `${counts.extreme} 个极高风险 · ${counts.high} 个高风险${fatigueHighCount ? ` · ${fatigueHighCount} 个素材疲劳` : ''}`,
+      text: fatigueHighCount ? '其中包含频次升高且 CTR、CPC 或 CPL 恶化的素材疲劳提醒，建议优先更换素材、封面或文案，不要继续增加预算。' : '存在持续消耗但没有 Lead、CPL 过高或转化异常的广告，建议优先检查素材、受众、表单和落地页。'
     },
     {
       kind: 'watch', filter: 'watch', icon: '◷', label: '继续观察',
       title: `${counts.watch} 个广告建议继续观察`,
-      meta: '暂不建议立即调整',
-      text: '当前数据处于观察区间，建议继续运行 2–3 天，并复查点击和转化表现。'
+      meta: signalMeta || '暂不建议立即调整',
+      text: signalMeta ? '已识别素材疲劳或受众趋于饱和的早期信号，建议准备新素材、测试新封面或文案，并持续观察 CTR、CPC 和 CPL 变化。' : '当前数据处于观察区间，建议继续运行 2–3 天，并复查点击和转化表现。'
     },
     {
       kind: 'excellent', filter: 'excellent', icon: '↗', label: '表现较好',
@@ -277,12 +287,16 @@ function renderDashboard() {
   const total = sumAds(rows);
   const haveData = state.ads.length > 0;
 
+  const reachAvailable = rows.some(row => Object.hasOwn(row.sourceRows || {}, 'reach') || Number(row.reach) > 0);
+  const frequency = averageFrequency(rows);
   $('mSpend').textContent = haveData ? money(total.spend) : '—';
   $('mLeads').textContent = haveData ? integer(total.results) : '—';
   $('mCpl').textContent = haveData && total.results ? money(total.spend / total.results) : '—';
   $('mClicks').textContent = haveData ? integer(total.clicks) : '—';
   $('mCtr').textContent = haveData ? pct(total.impressions ? total.clicks / total.impressions : 0) : '—';
   $('mCpm').textContent = haveData ? money(total.impressions ? total.spend / total.impressions * 1000 : 0) : '—';
+  $('mReach').textContent = haveData && reachAvailable ? integer(total.reach) : '—';
+  $('mFrequency').textContent = haveData && frequency !== null ? `${frequency.toFixed(1)} 次` : '—';
 
   const countries = summarise(rows, 'country');
   const campaigns = summarise(rows, 'campaign');

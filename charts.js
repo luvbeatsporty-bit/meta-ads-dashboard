@@ -205,6 +205,9 @@ function riskDonut(items, hidden = {}) {
 }
 
 function alertTitle(item) {
+  const categories = item.d.categories || [item.d.category];
+  if (categories.includes('creativeFatigue')) return '素材疲劳预警';
+  if (categories.includes('audienceSaturation')) return '受众趋于饱和';
   if (item.d.level === 'extreme') return '达到关停候选条件';
   if (item.d.level === 'high') return item.results ? 'CPL 高于目标值' : '高消耗但未获得 Lead';
   if (item.d.level === 'watch') return '当前表现需要继续观察';

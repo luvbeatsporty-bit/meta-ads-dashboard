@@ -1,4 +1,6 @@
-export function diagnose(row, rules, quality = null) {
+export const RISK_ORDER = {extreme:0,high:1,watch:2,normal:3,excellent:4};
+
+function baseDiagnose(row, rules, quality = null) {
   if (row.results === 0 && row.spend >= rules.extremeSpend) return {level:'extreme',label:'极高风险 · 关停候选',rule:`花费 ≥ $${rules.extremeSpend}，Lead = 0`,advice:'停止继续消耗；优先检查素材、受众、表单和落地页是否正常。'};
   if (row.results === 0 && row.clicks >= rules.extremeClicks) return {level:'extreme',label:'极高风险 · 关停候选',rule:`链接点击 ≥ ${rules.extremeClicks}，Lead = 0`,advice:'优先检查表单可提交性、页面加载、CTA 与广告承诺一致性。'};
   if (quality?.hasQualityStatus && quality.validCpl !== null && quality.validCpl > rules.highValidCpl && row.results > 0) return {level:'high',label:'高风险 · 人工处理',rule:`有效 Lead CPL > $${rules.highValidCpl}`,advice:'广告带来表单，但有效商机成本偏高；检查受众、国家、销售承接和 Lead 来源。'};
@@ -10,4 +12,29 @@ export function diagnose(row, rules, quality = null) {
   if (row.results > 0 && row.cpl <= rules.excellentCpl) return {level:'excellent',label:'表现优秀',rule:`CPL ≤ $${rules.excellentCpl}`,advice:'建议小步扩量 10–20%，复制测试相近受众或素材。'};
   return {level:'normal',label:'表现正常',rule:'CPL 处于正常区间或数据量偏少',advice:'建议继续运行，保持每日复查并结合实际 Lead 状态判断。'};
 }
-export const RISK_ORDER = {extreme:0,high:1,watch:2,normal:3,excellent:4};
+
+function combinedSignal(signals) {
+  const sorted = [...signals].sort((a, b) => RISK_ORDER[a.level] - RISK_ORDER[b.level]);
+  const primary = sorted[0];
+  return {
+    ...primary,
+    categories: [...new Set(sorted.map(signal => signal.type))],
+    rule: sorted.map(signal => signal.rule).join('；'),
+    advice: sorted.map(signal => signal.advice).join(' 同时，')
+  };
+}
+
+/** Frequency signals can only produce high/watch reminders; never an extreme stop candidate. */
+export function diagnose(row, rules, quality = null, signals = []) {
+  const baseline = baseDiagnose(row, rules, quality);
+  if (!signals.length || baseline.level === 'extreme') return baseline;
+  const signal = combinedSignal(signals);
+  const signalIsHigherRisk = RISK_ORDER[signal.level] < RISK_ORDER[baseline.level];
+  return {
+    ...(signalIsHigherRisk ? signal : baseline),
+    rule: signalIsHigherRisk ? `${signal.rule}；${baseline.rule}` : `${baseline.rule}；${signal.rule}`,
+    advice: signalIsHigherRisk ? `${signal.advice} 同时，${baseline.advice}` : `${baseline.advice} 同时，${signal.advice}`,
+    category: signal.type,
+    categories: signal.categories
+  };
+}

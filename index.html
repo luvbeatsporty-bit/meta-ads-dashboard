@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Personal Ads Intelligence Dashboard">
+  <title>Meta Ads Intelligence</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand"><div class="meta-mark" aria-hidden="true">∞</div><div><strong>Meta Ads</strong><span>Intelligence</span></div></div>
+    <nav class="side-nav" aria-label="主导航">
+      <button class="nav-item active" data-view="dashboard"><i>⌂</i><span>广告总览</span></button>
+      <button class="nav-item" data-view="leads"><i>♙</i><span>Lead 质量</span></button>
+      <button class="nav-item" data-view="quality"><i>◫</i><span>数据质量</span></button>
+      <button class="nav-item" data-view="rules"><i>⚙</i><span>规则设置</span></button>
+    </nav>
+    <div class="sidebar-note"><span></span><p>广告数据分析<br>Personal dashboard</p></div>
+  </aside>
+
+  <section class="main-shell">
+    <header class="main-header"><button class="menu-icon" aria-label="菜单">☰</button><div class="header-status"><span class="status-dot" id="statusDot"></span><span id="statusText">等待导入报表</span></div></header>
+
+    <main id="dashboardView" class="view active">
+      <section class="overview-heading"><div><span class="eyebrow">META ADS PERFORMANCE</span><h1>广告总览</h1><p>汇总查看各国家、Campaign 与素材的广告表现。</p></div><div class="header-tools"><span class="source-chip">数据来源：<b id="dataSourceLabel">未导入</b></span><button class="btn outline" id="demoButton">加载演示数据</button><button class="btn soft" id="clearDataButton">清除数据</button></div></section>
+
+      <section class="import-grid">
+        <label class="upload-card" id="adDropZone"><div class="upload-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v5h14v-5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div><span class="card-kicker">META ADS MANAGER</span><h2>导入广告报表</h2><p>拖入或选择一个或多个 <b>.xlsx / .csv</b> 文件。系统自动识别花费、Lead、展示、链接点击、国家、Campaign 与日期。</p><span class="upload-button">选择广告报表文件</span></div><input id="adFileInput" type="file" accept=".xlsx,.csv" multiple hidden></label>
+        <article class="country-guide"><div class="guide-title"><span class="guide-icon">◎</span><div><span class="card-kicker">FIRST TIME?</span><h2>按国家导出 Meta 数据</h2></div><button class="text-button" id="guideButton">查看完整说明 →</button></div><ol><li><b>打开 Ads Manager</b>，选择要分析的广告账户与日期范围。</li><li>在报表 / 导出界面选择层级：<b>Campaign、Ad Set 或 Ads</b>。</li><li>在 <b>Breakdown（细分）</b> 选择 <b>Country / 国家</b>。</li><li>保留花费、成效、展示、链接点击和报告日期列，导出为 <b>CSV 或 Excel</b> 后上传。</li></ol></article>
+      </section>
+
+      <section class="filter-bar"><div class="control"><label for="countryFilter">国家 / 地区</label><select id="countryFilter"><option value="">全部国家 / 地区</option></select></div><div class="control"><label for="campaignFilter">广告系列</label><select id="campaignFilter"><option value="">全部广告系列</option></select></div><div class="control search-control"><label for="searchInput">快速搜索</label><input id="searchInput" placeholder="搜索广告系列、国家或素材"></div><div class="control"><label for="rangeText">数据范围</label><input id="rangeText" value="导入报表后自动识别" readonly></div><button class="btn soft reset-button" id="resetButton">重置筛选</button></section>
+
+      <section class="metrics"><article class="metric spend"><div class="metric-head"><small>广告花费</small><i>$</i></div><strong id="mSpend">—</strong><span>当前筛选范围 USD</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 29 C16 27 18 13 31 23 S48 22 59 13 S76 27 88 18 S107 5 117 18 S134 22 148 7"/></svg></article><article class="metric leads"><div class="metric-head"><small>Lead / 成效</small><i>♙</i></div><strong id="mLeads">—</strong><span>广告报表结果总数</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 24 C12 17 21 28 30 24 S42 11 53 20 S68 18 78 9 S92 26 103 16 S125 30 148 8"/></svg></article><article class="metric cpl"><div class="metric-head"><small>平均 CPL</small><i>◎</i></div><strong id="mCpl">—</strong><span>花费 ÷ 广告 Lead</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 27 C12 25 18 16 27 22 S43 25 54 13 S72 24 82 20 S98 6 108 18 S129 24 148 10"/></svg></article><article class="metric clicks"><div class="metric-head"><small>链接点击</small><i>↗</i></div><strong id="mClicks">—</strong><span>用户点击总量</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 28 C12 18 19 30 28 20 S44 25 56 10 S72 24 83 16 S100 9 112 20 S130 19 148 6"/></svg></article><article class="metric clicks"><div class="metric-head"><small>链接 CTR</small><i>%</i></div><strong id="mCtr">—</strong><span>链接点击 ÷ 展示次数</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 25 C12 21 18 30 29 17 S44 28 56 13 S76 20 86 9 S102 26 115 13 S132 20 148 7"/></svg></article><article class="metric cpm"><div class="metric-head"><small>CPM</small><i>◉</i></div><strong id="mCpm">—</strong><span>每千次展示花费</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 22 C13 26 20 14 31 23 S47 12 58 19 S74 30 86 11 S104 26 116 15 S132 25 148 10"/></svg></article></section>
+
+      
+      <section class="panel advice-panel">
+        <div class="panel-head">
+          <div><span class="section-label">SMART ACTIONS</span><h2>AI 优化建议</h2><p>基于当前筛选范围和广告表现自动生成</p></div>
+          <div class="section-actions"><span class="panel-tag" id="adviceMeta">当前分析 0 个广告组合</span><button class="btn outline" id="viewAllAdviceButton">查看全部建议</button></div>
+        </div>
+        <div class="advice-list" id="adviceList"><div class="empty">导入广告数据后，系统会在这里给出优先处理、继续观察和可扩量建议。</div></div>
+      </section>
+
+      <section class="panel core-charts-panel" id="coreChartsPanel">
+        <div class="panel-head core-charts-head">
+          <div><span class="section-label">VISUAL OVERVIEW</span><h2>核心图表总览</h2><p>通过趋势、风险、国家和 Campaign 快速了解当前筛选范围。</p></div>
+          <div class="section-actions"><span class="panel-tag">随筛选自动更新</span><button class="btn outline chart-toggle" type="button" id="overviewChartsToggle" data-overview-toggle aria-expanded="true">收起图表</button></div>
+        </div>
+        <div class="core-charts-summary" id="coreChartsSummary" hidden></div>
+        <div class="core-charts-content" id="coreChartsContent">
+          <div class="core-chart-grid">
+            <article class="chart-card trend-card">
+              <div class="chart-card-head">
+                <div><h3>投放表现趋势</h3><p>Spend、Lead 与 CPL 按日期变化</p></div>
+                <div class="chart-head-actions"><div class="chart-segmented" aria-label="趋势时间粒度"><button type="button" data-trend-granularity="day" class="active">按日</button><button type="button" data-trend-granularity="week">按周</button><button type="button" data-trend-granularity="month">按月</button></div></div>
+              </div>
+              <div class="chart-host trend-host" id="overviewTrendChart"></div>
+            </article>
+            <article class="chart-card top-campaigns-card">
+              <div class="chart-card-head">
+                <div><h3>Top Campaigns</h3><p id="topCampaignsSubtitle">按 Lead 排名</p></div>
+                <div class="chart-segmented compact" aria-label="Top Campaign 指标"><button type="button" data-overview-campaign-metric="lead" class="active">Lead</button><button type="button" data-overview-campaign-metric="spend">花费</button><button type="button" data-overview-campaign-metric="cpl">CPL</button></div>
+              </div>
+              <div class="chart-host ranking-host" id="overviewCampaignChart"></div>
+            </article>
+            <article class="chart-card country-overview-card">
+              <div class="chart-card-head"><div><h3>国家表现</h3><p>按综合评分排名</p></div></div>
+              <div class="chart-host compact-ranking-host" id="overviewCountryChart"></div>
+            </article>
+            <article class="chart-card risk-overview-card">
+              <div class="chart-card-head"><div><h3>风险分布</h3><p>当前广告组合的诊断状态</p></div></div>
+              <div class="chart-host risk-donut-host" id="overviewRiskChart"></div>
+            </article>
+            <article class="chart-card recent-alerts-card">
+              <div class="chart-card-head"><div><h3>近期风险提醒</h3><p>需要关注的广告变化</p></div></div>
+              <div class="chart-host alerts-host" id="overviewAlertsChart"></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <div class="stop-panel" id="stopPanel"></div>
+      <section class="panel data-card" id="riskCenter"><div class="panel-head"><div><h2>风险与处理中心</h2><p>查看广告诊断依据、系统建议及人工处理记录。</p></div><div class="section-actions"><button class="btn outline chart-toggle" type="button" data-chart-toggle="risk" aria-expanded="false">查看图表</button><button class="btn soft" id="exportAllButton">导出完整诊断</button><button class="btn primary" id="exportStopButton">导出关停候选</button></div></div><div class="module-chart-panel" id="riskCharts" hidden></div><div class="risk-filter-bar" id="riskFilterBar" aria-label="风险状态筛选"></div><div class="table-wrap collapsible-list"><table class="data-table"><thead><tr><th>风险状态</th><th>广告系列 / 国家</th><th>花费</th><th>Lead</th><th>CPL</th><th>点击→Lead</th><th>判断依据</th><th>系统建议</th><th>人工处理</th></tr></thead><tbody id="riskTable"><tr><td colspan="9"><div class="empty">暂无数据</div></td></tr></tbody></table></div><div class="list-toggle-wrap" id="riskTableToggle"></div></section>
+      <section class="tables">
+        <article class="panel data-card country-quality-card" id="countryQualityCard"><div class="panel-head"><div><h2>国家综合质量排行</h2><p>综合 CPL、CTR、Lead 产出和风险项；评分越高，当前广告表现越稳健。</p></div><div class="section-actions"><span class="panel-tag">0–100 分</span><button class="btn outline chart-toggle" type="button" data-chart-toggle="country" aria-expanded="false">查看图表</button></div></div><div class="module-chart-panel" id="countryCharts" hidden></div><div class="table-wrap collapsible-list"><table class="data-table"><thead><tr><th>#</th><th>国家 / 地区</th><th>综合评分</th><th>表现等级</th><th>花费</th><th>Lead</th><th>CPL</th><th>CTR</th><th>风险项</th></tr></thead><tbody id="countryQualityTable"><tr><td colspan="9"><div class="empty">暂无数据</div></td></tr></tbody></table></div><div class="list-toggle-wrap" id="countryQualityToggle"></div></article>
+        <article class="panel data-card" id="campaignRankingCard"><div class="panel-head"><div><h2>Campaign 排行榜</h2><p>按花费从高到低排序</p></div><div class="section-actions"><button class="btn outline chart-toggle" type="button" data-chart-toggle="campaign" aria-expanded="false">查看图表</button></div></div><div class="module-chart-panel" id="campaignCharts" hidden></div><div class="table-wrap collapsible-list"><table class="data-table"><thead><tr><th>#</th><th>广告系列</th><th>国家</th><th>花费</th><th>Lead</th><th>CPL</th><th>点击</th><th>CPM</th></tr></thead><tbody id="campaignTable"><tr><td colspan="8"><div class="empty">暂无数据</div></td></tr></tbody></table></div><div class="list-toggle-wrap" id="campaignTableToggle"></div></article>
+      </section>
+    </main>
+
+    <main id="leadsView" class="view"><section class="overview-heading compact"><div><span class="eyebrow">LEAD QUALITY</span><h1>Lead 质量</h1><p>上传销售或 CRM Lead 文件，查看匹配情况与实际获客质量。</p></div></section><section class="import-grid lead-import-grid"><label class="upload-card lead-upload" id="leadDropZone"><div class="upload-icon mint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v5h14v-5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div><span class="card-kicker">CRM / SALES DATA</span><h2>导入 Lead 质量文件</h2><p>支持 <b>.csv / .xlsx</b>。导入前可确认字段映射。</p><span class="upload-button mint-button">选择 Lead 文件</span></div><input id="leadFileInput" type="file" accept=".csv,.xlsx" multiple hidden></label><article class="country-guide"><div class="guide-title"><span class="guide-icon mint">✓</span><div><span class="card-kicker">MATCHING</span><h2>销售质量数据：<span id="leadSourceLabel">未导入</span></h2></div></div><ol><li>优先用 <b>Ad ID、Ad Set ID、Campaign ID</b> 匹配。</li><li>没有 ID 时，使用精确的 <b>Campaign + 国家</b>。</li><li>不确定的 Lead 会标为待确认，不并入质量指标。</li></ol></article></section><section class="metrics lead-metrics"><article class="metric leads"><div class="metric-head"><small>Lead 文件总数</small><i>▤</i></div><strong id="leadTotal">—</strong><span>销售文件记录</span></article><article class="metric spend"><div class="metric-head"><small>已匹配 Lead</small><i>✓</i></div><strong id="leadMatched">—</strong><span>稳定 ID 或 Campaign + 国家</span></article><article class="metric cpl"><div class="metric-head"><small>有效 Lead</small><i>★</i></div><strong id="validLead">—</strong><span>排除重复与内部测试</span></article><article class="metric clicks"><div class="metric-head"><small>有效 Lead 率</small><i>%</i></div><strong id="validLeadRate">—</strong><span>需要广告 Lead 与状态字段</span></article><article class="metric cpm"><div class="metric-head"><small>有效 Lead CPL</small><i>$</i></div><strong id="validLeadCpl">—</strong><span>需存在可匹配有效 Lead</span></article></section><section class="panel analysis"><div class="panel-head"><div><h2>Lead 匹配与质量</h2><p id="leadQualitySummary">尚未导入 Lead 明细，因此没有 Lead 质量结论。</p></div></div><div id="leadQualityContent" class="quality-content empty">请导入 Lead CSV 或 Excel 文件。</div></section></main>
+
+    <main id="qualityView" class="view"><section class="overview-heading compact"><div><span class="eyebrow">DATA HEALTH</span><h1>数据质量</h1><p>检查广告字段、销售状态与 Lead 匹配是否适合用于分析。</p></div></section><section class="panel analysis"><div id="qualityContent" class="quality-grid"></div></section></main>
+
+    <main id="rulesView" class="view"><section class="overview-heading compact"><div><span class="eyebrow">DIAGNOSTIC RULES</span><h1>规则设置</h1><p>调整阈值后，广告诊断将立即按新规则重新计算。</p></div></section><section class="panel form-card"><div class="settings-grid rules-grid"><label>极高风险：无 Lead 花费 ≥ USD<input id="extremeSpendRule" type="number" min="0" step="1"></label><label>极高风险：无 Lead 点击 ≥<input id="extremeClicksRule" type="number" min="0" step="1"></label><label>高风险：CPL &gt; USD<input id="highCplRule" type="number" min="0" step="1"></label><label>高风险：最低点击量<input id="highClicksRule" type="number" min="0" step="1"></label><label>高风险：点击→Lead &lt; %<input id="highConversionRule" type="number" min="0" max="100" step="0.1"></label><label>高风险：有效 Lead CPL &gt; USD<input id="highValidCplRule" type="number" min="0" step="1"></label><label>高风险：有效 Lead 率 &lt; %<input id="lowValidRateRule" type="number" min="0" max="100" step="1"></label><label>观察：无 Lead 花费 ≥ USD<input id="watchSpendRule" type="number" min="0" step="1"></label><label>观察：CPL ≥ USD<input id="watchCplRule" type="number" min="0" step="1"></label><label>观察：链接 CTR &lt; %<input id="watchCtrRule" type="number" min="0" step="0.1"></label><label>优秀：CPL ≤ USD<input id="excellentCplRule" type="number" min="0" step="1"></label></div><div class="settings-actions"><button class="btn primary" id="saveRulesButton">保存并重新诊断</button><button class="btn soft" id="resetRulesButton">恢复默认规则</button></div></section></main>
+    <footer>Meta Ads Intelligence · 广告数据自动分析看板</footer>
+  </section>
+</div>
+
+
+<div class="modal" id="adviceModal"><div class="modal-box advice-modal"><div class="modal-head"><div><span class="eyebrow">ALL RECOMMENDATIONS</span><h2>全部优化建议</h2></div><button class="close" id="closeAdvice">×</button></div><div class="advice-filter-bar" id="adviceFilterBar"><button class="advice-filter active" data-advice-filter="all">全部</button><button class="advice-filter critical" data-advice-filter="critical">优先处理</button><button class="advice-filter watch" data-advice-filter="watch">继续观察</button><button class="advice-filter excellent" data-advice-filter="excellent">表现较好</button></div><div class="advice-detail-list" id="adviceDetailList"></div></div></div>
+<div class="modal" id="guideModal"><div class="modal-box guide-modal"><div class="modal-head"><div><span class="eyebrow">IMPORT GUIDE</span><h2>如何导出各国家广告数据</h2></div><button class="close" id="closeGuide">×</button></div><div class="guide-steps"><div><b>1</b><p><strong>进入 Ads Manager</strong><br>选择需要分析的广告账户，并设定需要的日期范围。</p></div><div><b>2</b><p><strong>打开报表或导出功能</strong><br>选择 Campaign、Ad Set 或 Ads 层级；建议首次先用 Campaign 层级。</p></div><div><b>3</b><p><strong>按国家细分</strong><br>在 Breakdown / 细分维度中选择 Country / 国家，使每个国家显示为单独的数据行。</p></div><div><b>4</b><p><strong>保留关键列并导出 Excel</strong><br>至少包含：国家/地区、Campaign、花费、成效或 Lead、展示、链接点击、报告起止日期。导出 .xlsx 后拖入本页。</p></div></div><p class="mini-note">Meta 的页面名称可能随语言或界面更新略有不同；只要导出文件包含上述字段，看板即可自动识别。</p></div></div>
+<div class="modal" id="mappingModal"><div class="modal-box mapping-box"><div class="modal-head"><h2>Lead 字段映射</h2><button class="close" id="closeMapping">×</button></div><p class="mini-note">请确认系统字段对应 Lead 文件中的哪一列。标记为“可选”的字段不影响导入。</p><div id="mappingFields" class="mapping-fields"></div><div class="settings-actions"><button class="btn primary" id="applyMappingButton">确认导入 Lead</button><button class="btn soft" id="cancelMappingButton">取消</button></div></div></div>
+<div class="toast" id="toast"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

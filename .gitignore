@@ -1,0 +1,26 @@
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Netlify local state / credentials
+.netlify/
+
+# Local test fixtures and imported data
+/test-fixtures/
+/data/
+*.xlsx
+*.xls
+*.csv
+
+# Logs / caches
+*.log
+node_modules/
+.npm/
+
+# Local environment files
+.env
+.env.*
+!.env.example

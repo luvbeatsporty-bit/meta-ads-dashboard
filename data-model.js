@@ -10,7 +10,9 @@ export const DEFAULT_RULES = Object.freeze({
   watchCpl: 15,
   watchCtrPercent: 0.8,
   watchCpc: 1.5,
-  excellentCpl: 10
+  excellentCpl: 10,
+  frequencyWarningThreshold: 2.5,
+  frequencyHighRiskThreshold: 4
 });
 
 // These are the fields used by the current Phase 1/2 implementation. Unknown

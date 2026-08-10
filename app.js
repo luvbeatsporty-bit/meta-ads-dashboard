@@ -22,7 +22,9 @@ const RULE_INPUTS = {
   watchSpend: 'watchSpendRule',
   watchCpl: 'watchCplRule',
   watchCtrPercent: 'watchCtrRule',
-  excellentCpl: 'excellentCplRule'
+  excellentCpl: 'excellentCplRule',
+  frequencyWarningThreshold: 'frequencyWarningThresholdRule',
+  frequencyHighRiskThreshold: 'frequencyHighRiskThresholdRule'
 };
 
 const state = {
@@ -110,7 +112,10 @@ function diagnostics() {
   return diagnosticGroups(selectedAds())
     .map(group => {
       const quality = groupQuality(group);
-      const frequency = frequencySignals(group.rows, state.rules.excellentCpl);
+      const frequency = frequencySignals(group.rows, state.rules.excellentCpl, {
+        warningThreshold: state.rules.frequencyWarningThreshold,
+        highRiskThreshold: state.rules.frequencyHighRiskThreshold
+      });
       return {
         ...group,
         ...frequency,
@@ -541,10 +546,19 @@ function renderRulesForm() {
 }
 
 function saveRules() {
+  const nextRules = { ...state.rules };
   Object.entries(RULE_INPUTS).forEach(([key, id]) => {
     const value = Number($(id).value);
-    state.rules[key] = Number.isFinite(value) && value >= 0 ? value : DEFAULT_RULES[key];
+    const isFrequencyRule = key === 'frequencyWarningThreshold' || key === 'frequencyHighRiskThreshold';
+    nextRules[key] = Number.isFinite(value) && value >= 0 && (!isFrequencyRule || value <= 20)
+      ? value
+      : DEFAULT_RULES[key];
   });
+  if (nextRules.frequencyHighRiskThreshold < nextRules.frequencyWarningThreshold) {
+    toast('高风险 Frequency 必须大于或等于观察 Frequency。');
+    return;
+  }
+  state.rules = nextRules;
   persistRules();
   resetExpandedLists();
   resetDetailCharts();

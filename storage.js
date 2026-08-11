@@ -51,8 +51,8 @@ async function dataTransaction(mode, handler) {
 }
 
 /** Saves imported source rows in this browser only. Large records stay in IndexedDB, not localStorage. */
-export async function saveDashboardData({ ads = [], leads = [], matches = [], source = '未导入' }) {
-  const value = { ads, leads, matches, source, savedAt: new Date().toISOString() };
+export async function saveDashboardData({ ads = [], commerceAds = [], leads = [], matches = [], source = '未导入', commerceSource = '未导入' }) {
+  const value = { ads, commerceAds, leads, matches, source, commerceSource, savedAt: new Date().toISOString() };
   return dataTransaction('readwrite', store => {
     store.put(value, DASHBOARD_KEY);
     return true;

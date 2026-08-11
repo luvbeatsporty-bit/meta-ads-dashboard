@@ -5,7 +5,7 @@ import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroup
 import { diagnose, RISK_ORDER } from './diagnosis.js';
 import { renderCharts } from './charts.js';
 import { downloadCsv } from './export.js';
-import { loadActions, saveActions, saveDashboardData, loadDashboardData, clearDashboardData } from './storage.js';
+import { loadActions, saveActions, saveDashboardData, loadDashboardData } from './storage.js';
 import { commerceDiagnostics } from './commerce-diagnosis.js';
 import { renderCommerceDashboard, renderCommerceRulesForm, renderFunnelPage } from './commerce-ui.js';
 
@@ -33,6 +33,7 @@ const RULE_INPUTS = {
 
 const state = {
   ads: [],
+  commerceAds: [],
   leads: [],
   matches: [],
   charts: {},
@@ -44,6 +45,7 @@ const state = {
   commerceStopHits: {},
   pendingLeadFiles: [],
   source: '未导入',
+  commerceSource: '未导入',
   adviceFilter: 'all',
   riskFilter: 'all',
   expandedLists: { risks: false, countryQuality: false, campaigns: false },
@@ -109,11 +111,15 @@ function toast(text) {
   window.toastTimer = setTimeout(() => element.classList.remove('show'), 3000);
 }
 
+function activeAds() {
+  return state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? state.commerceAds : state.ads;
+}
+
 function selectedAds() {
   const country = $('countryFilter').value;
   const campaign = $('campaignFilter').value;
   const search = $('searchInput').value.trim().toLowerCase();
-  return state.ads.filter(ad => (
+  return activeAds().filter(ad => (
     (!country || ad.country === country)
     && (!campaign || ad.campaign === campaign)
     && (!search || `${ad.country} ${ad.campaign} ${ad.adSet} ${ad.ad} ${ad.creative}`.toLowerCase().includes(search))
@@ -121,7 +127,7 @@ function selectedAds() {
 }
 
 function dateRange() {
-  const dates = state.ads.flatMap(ad => [ad.dateStart, ad.dateEnd]).filter(Boolean).sort();
+  const dates = activeAds().flatMap(ad => [ad.dateStart, ad.dateEnd]).filter(Boolean).sort();
   $('rangeText').value = dates.length ? `${dates[0]} 至 ${dates[dates.length - 1]}` : '未识别报告日期';
 }
 
@@ -133,8 +139,9 @@ function populateFilters() {
     element.value = values.includes(previous) ? previous : '';
   };
 
-  setOptions('countryFilter', [...new Set(state.ads.map(ad => ad.country))].filter(Boolean).sort(), '国家 / 地区');
-  setOptions('campaignFilter', [...new Set(state.ads.map(ad => ad.campaign))].filter(Boolean).sort(), '广告系列');
+  const ads = activeAds();
+  setOptions('countryFilter', [...new Set(ads.map(ad => ad.country))].filter(Boolean).sort(), '国家 / 地区');
+  setOptions('campaignFilter', [...new Set(ads.map(ad => ad.campaign))].filter(Boolean).sort(), '广告系列');
 }
 
 function currentQuality() {
@@ -332,9 +339,9 @@ function renderDashboard() {
     const items = commerceItems();
     renderCommerceDashboard({ rows, diagnostics: items, expanded: state.commerceExpanded });
     renderFunnelPage({ rows, diagnostics: items });
-    $('statusDot').classList.toggle('ready', state.ads.length > 0);
-    $('statusText').textContent = state.ads.length ? `${state.ads.length} 条广告记录已载入 · B2C 电商模式` : '等待导入 Meta 电商报表';
-    $('b2cSourceLabel').textContent = state.source;
+    $('statusDot').classList.toggle('ready', state.commerceAds.length > 0);
+    $('statusText').textContent = state.commerceAds.length ? `${state.commerceAds.length} 条 B2C 广告记录已载入 · B2C 电商模式` : '等待导入 B2C Meta 电商报表';
+    $('b2cSourceLabel').textContent = state.commerceSource;
     return;
   }
   const rows = selectedAds();
@@ -531,13 +538,26 @@ function renderLeadQuality() {
 
 function renderDataQuality() {
   const container = $('qualityContent');
-  const ads = state.ads;
-  const leads = state.leads;
-  const quality = currentQuality();
+  const isCommerce = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE;
+  const ads = isCommerce ? state.commerceAds : state.ads;
   const count = field => ads.filter(ad => Object.hasOwn(ad.sourceRows || {}, field) || String(ad[field] ?? '').trim()).length;
   const adSummary = ads.length ? `${ads.length} 条广告记录` : '未导入';
-  const qualityText = leads.length ? `已匹配 ${quality.matchedCount}，待确认 ${quality.pendingCount}，未匹配 ${quality.unmatchedCount}` : '尚未导入销售 Lead 文件';
 
+  if (isCommerce) {
+    const availability = field => ads.length ? `${Math.round(count(field) / ads.length * 100)}%` : '—';
+    container.innerHTML = `
+      <div class="quality-item"><b>${adSummary}</b><p>B2C 广告数据载入情况</p></div>
+      <div class="quality-item"><b>${availability('spend')}</b><p>Spend 字段可用率（0 值也视为有效）</p></div>
+      <div class="quality-item"><b>${availability('impressions')}</b><p>Impressions 字段可用率；缺失时 CTR、CPM 仅显示 —</p></div>
+      <div class="quality-item"><b>${availability('clicks')}</b><p>Link Clicks 字段可用率；缺失时漏斗点击率仅显示 —</p></div>
+      <div class="quality-item"><b>${availability('purchases')}</b><p>Purchases 字段可用率；缺失时无法判断 CPA 和购买转化</p></div>
+      <div class="quality-item"><b>${availability('metaAttributedGmv')}</b><p>Meta Attributed GMV 字段可用率；缺失时 ROAS、AOV 仅显示 —</p></div>`;
+    return;
+  }
+
+  const leads = state.leads;
+  const quality = currentQuality();
+  const qualityText = leads.length ? `已匹配 ${quality.matchedCount}，待确认 ${quality.pendingCount}，未匹配 ${quality.unmatchedCount}` : '尚未导入销售 Lead 文件';
   container.innerHTML = `
     <div class="quality-item"><b>${adSummary}</b><p>广告数据载入情况</p></div>
     <div class="quality-item"><b>${ads.length ? `${Math.round(count('spend') / ads.length * 100)}%` : '—'}</b><p>花费字段可用率（0 值也视为有效）</p></div>
@@ -563,9 +583,11 @@ function markDataChanged() { state.changedSinceStartup = true; }
 async function persistImportedData() {
   return Boolean(await saveDashboardData({
     ads: state.ads,
+    commerceAds: state.commerceAds,
     leads: state.leads,
     matches: state.matches,
-    source: state.source
+    source: state.source,
+    commerceSource: state.commerceSource
   }));
 }
 
@@ -596,6 +618,8 @@ function switchBusinessMode(mode) {
   document.body.dataset.businessMode = mode;
   document.querySelectorAll('[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === mode));
   placeSharedFilterBar();
+  populateFilters();
+  dateRange();
   resetExpandedLists();
   resetDetailCharts();
   switchView(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard');
@@ -603,12 +627,14 @@ function switchBusinessMode(mode) {
 }
 
 function switchView(view) {
-  if (state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE && (view === 'dashboard' || view === 'leads')) view = 'ecommerce';
-  if (state.businessMode === BUSINESS_MODE.B2B_LEAD && (view === 'ecommerce' || view === 'funnel')) view = 'dashboard';
+  const allowedViews = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE
+    ? new Set(['ecommerce', 'funnel', 'quality', 'rules'])
+    : new Set(['dashboard', 'leads', 'quality', 'rules']);
+  if (!allowedViews.has(view)) view = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard';
   document.querySelectorAll('.view').forEach(item => item.classList.toggle('active', item.id === `${view}View`));
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   if (view === 'rules') renderRulesForm();
-  if (view === 'funnel') renderDashboard();
+  if (view === 'funnel' || view === 'quality') renderDashboard();
   document.body.classList.remove('nav-open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -622,7 +648,7 @@ function renderRulesForm() {
     heading.querySelector('p').textContent = isCommerce ? '调整 ROAS、CPA 与无购买阈值后，电商广告诊断将立即按新规则重新计算。' : '调整阈值后，广告诊断将立即按新规则重新计算。';
   }
   if (isCommerce) {
-    renderCommerceRulesForm(state.commerceRules);
+    renderCommerceRulesForm(state.commerceRules, state.rules);
     return;
   }
   Object.entries(RULE_INPUTS).forEach(([key, id]) => { $(id).value = state.rules[key]; });
@@ -636,6 +662,13 @@ function saveRules() {
       const value = Number(input.value);
       next[key] = Number.isFinite(value) && value >= 0 ? value : DEFAULT_COMMERCE_RULES[key];
     });
+    const nextFrequencyRules = { ...state.rules };
+    document.querySelectorAll('[data-frequency-rule]').forEach(input => {
+      const key = input.dataset.frequencyRule;
+      const value = Number(input.value);
+      nextFrequencyRules[key] = Number.isFinite(value) && value >= 0 && value <= 20 ? value : DEFAULT_RULES[key];
+    });
+    if (nextFrequencyRules.frequencyHighRiskThreshold < nextFrequencyRules.frequencyWarningThreshold) { toast('高风险 Frequency 必须大于或等于观察 Frequency。'); return; }
     if (next.targetRoas <= 0) { toast('目标 ROAS 必须大于 0。'); return; }
     if (next.targetCpa <= 0) { toast('目标 CPA 必须大于 0。'); return; }
     if (next.roasWatchRatio < 0 || next.roasWatchRatio > 1 || next.roasHighRiskRatio < 0 || next.roasHighRiskRatio > 1) { toast('ROAS 比例必须在 0 到 1 之间。'); return; }
@@ -643,6 +676,7 @@ function saveRules() {
     if (next.cpaHighRiskMultiplier < next.cpaWatchMultiplier) { toast('CPA 高风险倍数必须大于或等于观察倍数。'); return; }
     if (next.noPurchaseStopSpendMultiplier < next.noPurchaseHighSpendMultiplier) { toast('无购买自动关停候选倍数必须大于或等于高风险花费倍数。'); return; }
     state.commerceRules = next;
+    state.rules = nextFrequencyRules;
     recordCommerceDiagnosticPass();
     persistRules();
     resetExpandedLists();
@@ -746,11 +780,11 @@ async function clearData() {
   state.source = '未导入';
   populateFilters();
   dateRange();
-  await clearDashboardData();
+  const saved = await persistImportedData();
   resetExpandedLists();
   resetDetailCharts();
   renderDashboard();
-  toast('已清除本机浏览器中保存的数据');
+  toast(saved ? '已清除 B2B 广告与 Lead 数据；B2C 数据保持不变' : '已清除 B2B 广告与 Lead 数据');
 }
 
 async function importAds(files) {
@@ -776,6 +810,28 @@ async function importAds(files) {
   resetDetailCharts();
   renderDashboard();
   toast(`已导入 ${ads.length} 条广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+}
+
+async function importCommerceAds(files) {
+  const selected = [...files];
+  if (selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) { toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。'); return; }
+  const usable = selected.filter(file => /\.(xlsx|csv)$/i.test(file.name));
+  if (!usable.length) { toast('请选择 .xlsx 或 .csv 格式的 B2C 广告报表。'); return; }
+  markDataChanged();
+  const ads = await importAdFiles(usable);
+  if (!ads.length) {
+    toast('未识别到可分析的 B2C 电商字段。请检查报表表头。');
+    return;
+  }
+  state.commerceAds = ads;
+  state.commerceSource = 'B2C Meta Excel';
+  populateFilters();
+  dateRange();
+  recordCommerceDiagnosticPass();
+  const saved = await persistImportedData();
+  resetExpandedLists();
+  renderDashboard();
+  toast(`已导入 ${ads.length} 条 B2C 广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
 }
 
 async function prepareLeads(files) {
@@ -820,8 +876,10 @@ function focusCampaign(country, campaign) {
 
 function bindEvents() {
   $('adFileInput').addEventListener('change', event => importAds(event.target.files));
+  $('b2cAdFileInput').addEventListener('change', event => importCommerceAds(event.target.files));
   $('leadFileInput').addEventListener('change', event => prepareLeads(event.target.files));
   bindDrop('adDropZone', importAds);
+  bindDrop('b2cAdDropZone', importCommerceAds);
   bindDrop('leadDropZone', prepareLeads);
 
   ['countryFilter', 'campaignFilter'].forEach(id => $(id).addEventListener('change', refreshForFilterChange));
@@ -974,7 +1032,10 @@ function bindEvents() {
     if (wasExpanded) requestAnimationFrame(() => $('b2cRiskCenter')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   });
 
-  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-view]');
+    if (button) switchView(button.dataset.view);
+  });
   document.querySelector('.menu-icon').addEventListener('click', () => document.body.classList.toggle('nav-open'));
 }
 
@@ -995,11 +1056,13 @@ function init() {
 
   // 导入按钮必须立即可用；本机历史数据在后台恢复，避免本地存储异常时阻塞文件选择。
   loadDashboardData().then(saved => {
-    if (state.changedSinceStartup || !saved || !Array.isArray(saved.ads) || !saved.ads.length) return;
-    state.ads = saved.ads;
+    if (state.changedSinceStartup || !saved || (!Array.isArray(saved.ads) || !saved.ads.length) && (!Array.isArray(saved.commerceAds) || !saved.commerceAds.length)) return;
+    state.ads = Array.isArray(saved.ads) ? saved.ads : [];
+    state.commerceAds = Array.isArray(saved.commerceAds) ? saved.commerceAds : [];
     state.leads = Array.isArray(saved.leads) ? saved.leads : [];
     state.matches = Array.isArray(saved.matches) ? saved.matches : [];
     state.source = saved.source || 'Meta Excel';
+    state.commerceSource = saved.commerceSource || '未导入';
     populateFilters();
     dateRange();
     renderDashboard();

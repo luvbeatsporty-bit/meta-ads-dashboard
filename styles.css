@@ -586,6 +586,7 @@ body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
 .business-mode-switch > span { padding:0 7px; color:#8894aa; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
 .business-mode-switch button { min-height:29px; padding:0 10px; color:#65718a; border:0; border-radius:8px; background:transparent; font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
 .business-mode-switch button.active { color:#fff; background:#506ceb; box-shadow:0 3px 9px rgba(80,108,235,.22); }
+.b2c-import-grid { grid-template-columns:minmax(320px,1fr); margin-bottom:18px; }
 .commerce-funnel-panel { margin-top:20px; }
 .commerce-funnel-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; padding-top:5px; }
 .commerce-funnel-stage { min-width:0; padding:14px; border:1px solid #e8edf6; border-radius:13px; background:#fbfcff; }

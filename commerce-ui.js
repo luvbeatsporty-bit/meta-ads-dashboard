@@ -96,11 +96,16 @@ function renderCommerceTable(rows, diagnostics, expanded) {
   toggle.innerHTML = details.length > DISPLAY_LIMIT ? `<button type="button" class="list-toggle" data-b2c-list-toggle>${expanded ? '收起，仅显示前 5 条 ↑' : `展开全部（共 ${details.length} 条） ↓`}</button>` : '';
 }
 
-export function renderCommerceRulesForm(rules) {
+export function renderCommerceRulesForm(rules, frequencyRules) {
   const fields = [
     ['targetRoas', '目标 ROAS', 0.1, 0.1], ['targetCpa', '目标 CPA', 1, 0.01], ['roasWatchRatio', '观察 ROAS 比例', 0.05, 0, 1], ['roasHighRiskRatio', '高风险 ROAS 比例', 0.05, 0, 1],
     ['cpaWatchMultiplier', 'CPA 观察倍数', 0.1, 0], ['cpaHighRiskMultiplier', 'CPA 高风险倍数', 0.1, 0], ['noPurchaseHighSpendMultiplier', '无购买高风险花费倍数', 0.1, 0], ['noPurchaseStopSpendMultiplier', '无购买自动关停候选倍数', 0.1, 0]
   ];
   const grid = document.getElementById('b2cRulesGrid');
-  grid.innerHTML = fields.map(([key, label, step, min, max]) => `<label>${label}<input id="commerceRule-${key}" data-commerce-rule="${key}" type="number" min="${min}"${max !== undefined ? ` max="${max}"` : ''} step="${step}" value="${rules[key]}"></label>`).join('');
+  const commerceFields = fields.map(([key, label, step, min, max]) => `<label>${label}<input id="commerceRule-${key}" data-commerce-rule="${key}" type="number" min="${min}"${max !== undefined ? ` max="${max}"` : ''} step="${step}" value="${rules[key]}"></label>`).join('');
+  const frequencyFields = [
+    ['frequencyWarningThreshold', 'Frequency 观察值', 2.5],
+    ['frequencyHighRiskThreshold', 'Frequency 高风险值', 4]
+  ].map(([key, label, fallback]) => `<label>${label}<input id="commerceRule-${key}" data-frequency-rule="${key}" type="number" min="0" max="20" step="0.1" value="${frequencyRules?.[key] ?? fallback}"></label>`).join('');
+  grid.innerHTML = `${commerceFields}${frequencyFields}`;
 }

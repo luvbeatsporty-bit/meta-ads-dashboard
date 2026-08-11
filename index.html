@@ -23,7 +23,7 @@
   </aside>
 
   <section class="main-shell">
-    <header class="main-header"><button class="menu-icon" aria-label="菜单">☰</button><div class="business-mode-switch" role="group" aria-label="业务模式"><span>Business Mode</span><button type="button" data-business-mode="b2b-lead" class="active">B2B 获客分析</button><button type="button" data-business-mode="b2c-commerce">B2C 电商分析</button></div><div class="header-status"><span class="status-dot" id="statusDot"></span><span id="statusText">等待导入报表</span></div></header>
+    <header class="main-header"><button class="menu-icon" aria-label="菜单">☰</button><div class="business-mode-switch" role="group" aria-label="业务模式"><span>Business Mode</span><button type="button" data-business-mode="b2b-lead" class="active">B2B 广告分析</button><button type="button" data-business-mode="b2c-commerce">B2C 广告分析</button></div><div class="header-status"><span class="status-dot" id="statusDot"></span><span id="statusText">等待导入报表</span></div></header>
 
     <main id="dashboardView" class="view active">
       <section class="overview-heading"><div><span class="eyebrow">META ADS PERFORMANCE</span><h1>广告总览</h1><p>汇总查看各国家、Campaign 与素材的广告表现。</p></div><div class="header-tools"><span class="source-chip">数据来源：<b id="dataSourceLabel">未导入</b></span><button class="btn outline" id="demoButton">加载演示数据</button><button class="btn soft" id="clearDataButton">清除数据</button></div></section>
@@ -95,6 +95,7 @@
 
     <main id="ecommerceView" class="view">
       <section class="overview-heading"><div><span class="eyebrow">META E-COMMERCE PERFORMANCE</span><h1>B2C 电商广告分析</h1><p>以 Meta Purchases、Meta Attributed GMV、ROAS 和 CPA 为核心，结合转化漏斗定位问题。</p></div><div class="header-tools"><span class="source-chip">数据来源：<b id="b2cSourceLabel">未导入</b></span></div></section>
+      <section class="import-grid b2c-import-grid"><label class="upload-card" id="b2cAdDropZone"><div class="upload-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v5h14v-5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div><span class="card-kicker">META ADS MANAGER</span><h2>导入 B2C Meta 广告报表</h2><p>拖入或选择一个或多个 <b>.xlsx / .csv</b> 文件，系统自动识别 Spend、Purchase、GMV、LPV、ATC、Checkout、Reach、Frequency 等电商广告指标。</p><span class="upload-button">选择 B2C 广告报表</span></div><input id="b2cAdFileInput" type="file" accept=".xlsx,.csv" multiple hidden></label></section>
       <section class="metrics" id="b2cMetrics"></section>
       <section class="panel advice-panel"><div class="panel-head"><div><span class="section-label">SMART E-COMMERCE ACTIONS</span><h2>AI 优化建议</h2><p>按 ROAS、CPA、Purchase 和转化漏斗自动生成</p></div><div class="section-actions"><span class="panel-tag" id="b2cAdviceMeta">当前分析 0 个广告组合</span></div></div><div class="advice-list" id="b2cAdviceList"><div class="empty">导入包含 Purchase、GMV 与漏斗字段的 Meta 报表后，系统会在这里给出建议。</div></div></section>
       <section class="panel commerce-funnel-panel"><div class="panel-head"><div><span class="section-label">ECOMMERCE CONVERSION FUNNEL</span><h2>电商转化漏斗</h2><p>Impressions → Link Clicks → LPV → Add to Cart → Checkout → Purchase</p></div><div class="section-actions"><button class="btn outline" type="button" data-view="funnel">查看完整漏斗</button></div></div><div id="b2cFunnelCompact" class="commerce-funnel-grid compact"></div></section>

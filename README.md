@@ -182,33 +182,29 @@ netlify deploy --prod --dir .
 
 ## 10. Netlify Site 是哪个
 
-当前目录残留的 `.netlify/state.json` 指向过去的临时匿名站点 ID：
+当前正式长期 Netlify Project / Site：
 
 ```text
-32a99266-d0a0-4615-ad95-15c73a193b66
+ads-dashboard-megan
 ```
 
-它不代表已经完成长期账号绑定。本次正式部署需要在你的 Netlify 账号下创建或选择一个 Site，并连接 GitHub 仓库。建议 Site Name：
+它已经连接 GitHub Repository：
 
 ```text
-meta-ads-intelligence-dashboard
+luvbeatsporty-bit/meta-ads-dashboard
 ```
 
-如果名称已被占用，可尝试：
-
-- `b2b-meta-ads-dashboard`
-- `ads-performance-intelligence`
-- `meta-campaign-insights`
+生产分支为 `main`，Netlify 已启用从 `main` 自动发布。不要使用 Netlify Drop，也不要新建第二个 Site。
 
 ## 11. 正式网站 URL 是什么
 
-在 Netlify Site 创建并绑定后，Netlify 会生成固定地址：
+当前正式生产地址：
 
 ```text
-https://你的-site-name.netlify.app
+https://ads-dashboard-megan.netlify.app
 ```
 
-当前还没有账号绑定后的正式 URL。过去的匿名 Drop 地址不作为正式地址使用。
+该 URL 属于上面的固定 Netlify Site。功能分支不会改动生产站点；只有合并或推送到 `main` 后，Netlify 才会把新版发布到这个相同地址。
 
 ## 12. 为什么以后更新网站 URL 不会改变
 

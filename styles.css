@@ -574,3 +574,24 @@ footer { padding: 8px 34px 28px; color: #929caf; font-size: 11px; text-align: ce
   .detail-chart-grid { padding: 10px; }
   .chart-toggle { flex: 1; }
 }
+
+/* B2C commerce mode: extension of the existing dashboard language. */
+.b2c-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2c-only { display: flex; }
+body[data-business-mode="b2c-commerce"] .b2b-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2b-rules-only { display: none; }
+.b2c-rules-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
+.business-mode-switch { display:flex; align-items:center; gap:4px; margin-left:18px; padding:4px; border:1px solid #e3e9f4; border-radius:11px; background:#f6f8fc; }
+.business-mode-switch > span { padding:0 7px; color:#8894aa; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+.business-mode-switch button { min-height:29px; padding:0 10px; color:#65718a; border:0; border-radius:8px; background:transparent; font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+.business-mode-switch button.active { color:#fff; background:#506ceb; box-shadow:0 3px 9px rgba(80,108,235,.22); }
+.commerce-funnel-panel { margin-top:20px; }
+.commerce-funnel-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; padding-top:5px; }
+.commerce-funnel-stage { min-width:0; padding:14px; border:1px solid #e8edf6; border-radius:13px; background:#fbfcff; }
+.commerce-funnel-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; color:#6e7a91; font-size:11px; font-weight:700; }
+.commerce-funnel-top span { line-height:1.35; }.commerce-funnel-top b { color:#33415b; font-size:16px; white-space:nowrap; }
+.commerce-funnel-track { height:7px; overflow:hidden; margin:12px 0 8px; border-radius:99px; background:#eaf0fb; }.commerce-funnel-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#506ceb,#49bea8); }.commerce-funnel-stage:nth-child(2) i{background:linear-gradient(90deg,#5d7df4,#6a6be6)}.commerce-funnel-stage:nth-child(3) i{background:linear-gradient(90deg,#6b63d8,#9a63d8)}.commerce-funnel-stage:nth-child(4) i{background:linear-gradient(90deg,#7b68d8,#c775b1)}.commerce-funnel-stage:nth-child(5) i{background:linear-gradient(90deg,#bb70ac,#e09b68)}.commerce-funnel-stage:nth-child(6) i{background:linear-gradient(90deg,#e09b68,#50b596)}
+.commerce-funnel-stage small { color:#9aa5b7; font-size:10px; }.commerce-data-note { margin:12px 3px 0; }.b2c-data-table { min-width:3100px; }.b2c-data-table td small { display:block; margin-top:3px; color:#97a2b6; font-size:10px; }
+.funnel-summary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }.funnel-summary-grid>div { display:grid; gap:5px; padding:16px; border:1px solid #e7ecf5; border-radius:14px; background:#fbfcff; }.funnel-summary-grid small,.funnel-summary-grid span{color:#8894aa;font-size:11px;line-height:1.5}.funnel-summary-grid b{color:#33415b;font-size:21px}.funnel-summary-grid b.watch{color:#ad7b1f}.funnel-summary-grid b.high,.funnel-summary-grid b.extreme{color:#c25452}.funnel-summary-grid b.excellent{color:#169477}
+@media(max-width:980px){.commerce-funnel-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.business-mode-switch>span{display:none}}@media(max-width:680px){.business-mode-switch{order:3;width:100%;margin:6px 0 0}.main-header{flex-wrap:wrap}.commerce-funnel-grid,.funnel-summary-grid{grid-template-columns:1fr}.business-mode-switch button{flex:1}.b2c-only{display:none!important}body[data-business-mode="b2c-commerce"] .b2c-only{display:flex!important}}

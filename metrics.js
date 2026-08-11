@@ -107,11 +107,11 @@ export function frequencySignals(rows, targetCpl, thresholds = {}) {
   const fatigue = (level, rule, advice) => signals.push({ type: 'creativeFatigue', level, label: `${level === 'high' ? '高风险' : '需要观察'} · 素材疲劳`, rule, advice });
 
   if (frequency !== null && frequency >= highRiskThreshold) {
-    if (comparison?.cplChange !== null && comparison.cplChange >= 0.25) {
+    if (comparison && comparison.cplChange !== null && comparison.cplChange >= 0.25) {
       fatigue('high', `${label}平均频次 ≥ ${highRiskThreshold}，且近 3 天 CPL 较前 3 天上涨 ≥ 25%`, '广告频次持续升高，同时获客成本明显上涨，素材疲劳可能已经开始影响最终转化。建议优先更换素材或暂停表现较差的旧素材，并测试新的 Creative。');
-    } else if (comparison?.ctrChange !== null && comparison.ctrChange <= -0.20) {
+    } else if (comparison && comparison.ctrChange !== null && comparison.ctrChange <= -0.20) {
       fatigue('high', `${label}平均频次 ≥ ${highRiskThreshold}，且近 3 天 CTR 较前 3 天下降 ≥ 20%`, '广告频次已经升高，同时点击率明显下降，说明当前素材可能已经出现疲劳。建议优先更换素材、封面、广告标题或视频前三秒，而不是继续增加预算。');
-    } else if (comparison?.cpcChange !== null && comparison.cpcChange >= 0.20) {
+    } else if (comparison && comparison.cpcChange !== null && comparison.cpcChange >= 0.20) {
       fatigue('high', `${label}平均频次 ≥ ${highRiskThreshold}，且近 3 天 CPC 较前 3 天上涨 ≥ 20%`, '广告重复曝光较高，同时点击成本正在上升，当前素材的吸引力可能正在下降。建议更换素材，并检查当前目标受众是否过窄。');
     } else {
       fatigue('high', `${label}平均频次 ≥ ${highRiskThreshold}`, '当前广告重复曝光较高，存在明显素材疲劳或受众趋于饱和风险，建议尽快更换素材，并检查目标受众范围。');

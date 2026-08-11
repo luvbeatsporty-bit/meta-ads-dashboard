@@ -1,10 +1,10 @@
 # Meta Ads Intelligence 数据看板
 
-一个纯前端的 B 端 Meta 广告数据分析看板。它使用原生 HTML、CSS 和 JavaScript ES Module，不需要 React、Vue 或构建工具。
+一个纯前端的 Meta 广告数据分析看板。它使用原生 HTML、CSS 和 JavaScript ES Module，不需要 React、Vue 或构建工具，并在同一网站内提供 B2B 获客分析与 B2C 电商分析两种模式。
 
 ## 1. 项目是什么
 
-看板支持导入 Meta Ads Manager 导出的 CSV / XLSX 广告报表，并在浏览器本地计算 KPI、国家表现、Campaign 排名、风险诊断和 Lead 质量。当前项目不连接广告平台 API，数据不会自动从 Meta 拉取。
+看板支持导入 Meta Ads Manager 导出的 CSV / XLSX 广告报表，并在浏览器本地计算 KPI、国家表现、Campaign 排名、风险诊断和 Lead 质量。B2B 模式关注 Lead、CPL 和有效 Lead；B2C 模式关注 Purchase、Meta Attributed GMV、ROAS、CPA、AOV 与电商转化漏斗。当前项目不连接广告平台 API，数据不会自动从 Meta 拉取。
 
 ## 2. 本地项目路径
 
@@ -49,7 +49,11 @@ python3 -m http.server 8765
 4. 检查日期、国家、花费、Lead、CPL、CTR 和风险诊断；
 5. 使用筛选器检查重点国家和 Campaign。
 
-推荐广告报表至少包含：国家/地区、Campaign、Ad Set、Ad、花费、成效或 Lead、展示、链接点击、报告起止日期。
+B2B 推荐广告报表至少包含：国家/地区、Campaign、Ad Set、Ad、花费、成效或 Lead、展示、链接点击、报告起止日期。
+
+B2C 模式请额外导出：`Landing Page Views`、`Add to Cart`、`Initiate Checkout`、`Purchases`、`Purchase Conversion Value`、`Reach`、`Frequency` 和 `Placement`。导入器支持常见的平铺列，以及 Meta `actions` / `action_values` 结构：购买次数读取自 actions，Meta 归因销售额读取自 action_values。
+
+> `Meta Attributed GMV` 是 Meta 归因销售额，不等同于店铺实际销售额（Store GMV）。本阶段不把 Shopify、Shopline 或 WooCommerce 的订单、退款、净销售额与 Meta 数据混在一起。
 
 ## 6. 如何修改网页
 
@@ -61,8 +65,12 @@ python3 -m http.server 8765
 - `charts.js`：图表渲染；
 - `metrics.js`：指标汇总；
 - `diagnosis.js`：风险诊断规则；
-- `data-model.js`：字段识别和数据模型；
+- `data-model.js`：字段识别、公共数据模型和 B2C 默认规则；
 - `excel-import.js`：广告文件读取；
+- `commerce-mapping.js`：Meta actions / action_values 电商转化映射；
+- `commerce-metrics.js`：B2C KPI 与统一漏斗计算；
+- `commerce-diagnosis.js`：B2C ROAS、CPA、无购买、漏斗和 Frequency 诊断；
+- `commerce-ui.js`：B2C 总览、漏斗、明细表与规则表单；
 - `lead-import.js`：Lead 文件读取与匹配；
 - `storage.js`：浏览器本地保存；
 - `export.js`：CSV 导出。
@@ -79,7 +87,9 @@ python3 -m http.server 8765
 4. 切换国家、Campaign 和搜索条件；
 5. 导入真实 CSV / XLSX；
 6. 导入 Lead 文件并检查匹配；
-7. 测试风险筛选、列表展开/收起、图表展开/收起和 CSV 导出。
+7. 测试风险筛选、列表展开/收起、图表展开/收起和 CSV 导出；
+8. 切换 **B2B 获客分析 / B2C 电商分析**，确认 B2B 页面仍保持原有逻辑；
+9. 在 B2C 模式检查 Spend、Purchases、Meta GMV、ROAS、CPA、AOV，以及 Impressions → Link Clicks → LPV → Add to Cart → Checkout → Purchase 漏斗。
 
 代码检查（如本机有 Node.js）：
 
@@ -93,18 +103,60 @@ node --check lead-import.js
 node --check metrics.js
 node --check settings.js
 node --check storage.js
+node --check commerce-mapping.js
+node --check commerce-metrics.js
+node --check commerce-diagnosis.js
+node --check commerce-ui.js
+node tests/commerce.test.mjs
 ```
+
+
+## B2C 模式说明
+
+### 模式与公共筛选
+
+页面顶部可以切换：
+
+- **B2B 获客分析**：保持既有 Lead、CPL、有效 Lead 与自动关停规则；
+- **B2C 电商分析**：使用相同的导入数据和日期 / 国家 / Campaign 等公共筛选器，但改用购买和收入指标。
+
+B2C 漏斗口径统一为：
+
+```text
+Impressions → Link Clicks → Landing Page Views → Add to Cart → Initiate Checkout → Purchases
+LPV Rate = Landing Page Views / Link Clicks
+ATC Rate = Add to Cart / Landing Page Views
+Checkout Rate = Initiate Checkout / Add to Cart
+Checkout Completion Rate = Purchases / Initiate Checkout
+Purchase CVR = Purchases / Link Clicks
+ROAS = Meta Attributed GMV / Spend
+CPA = Spend / Purchases
+AOV = Meta Attributed GMV / Purchases
+```
+
+所有除数为 0 的指标均显示 `—`，不会显示 `Infinity` 或 `NaN`。
+
+### B2C 规则与提醒
+
+在 B2C 模式的“规则设置”中可配置目标 ROAS、目标 CPA、ROAS/CPA 观察与高风险比例、无购买高风险花费倍数和自动暂停候选倍数。Frequency 阈值继续复用 B2B 的“观察 Frequency / 高风险 Frequency”配置，且优先按最近 7 天计算。
+
+Frequency 仅用于素材疲劳或受众饱和提醒，**不会单独触发自动关停**。无购买自动暂停候选仅是浏览器内的诊断标记，不会调用 Meta API；是否实际暂停仍取决于现有自动化开关与人工复核。
+
+### 功能分支与预览
+
+B2C 开发在 `feature/b2c-commerce-dashboard` 分支进行。推送该分支后，若现有 Netlify Site 已启用 Git Deploy Previews，可在该 Site 的 **Deploys → Deploy previews** 查看该分支的预览；不会创建第二个 Netlify Site，也不会改变正式 URL。
 
 ## 8. 如何提交 Git
 
 ```bash
 git status
-git add .
+git add <明确列出的代码文件>
+git status --short
 git commit -m "说明本次修改"
 git push
 ```
 
-不要提交公司的广告数据、Lead 文件、`.env`、`.netlify/` 或系统缓存文件。
+不要提交公司的广告数据、Lead 文件、`.csv`、`.xlsx`、`.env`、`.netlify/`、`.vendor/`、本地 GIF 或系统缓存文件。
 
 ## 9. 如何部署
 

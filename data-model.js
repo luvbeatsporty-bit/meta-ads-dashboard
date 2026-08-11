@@ -1,3 +1,16 @@
+export const BUSINESS_MODE = Object.freeze({ B2B_LEAD: 'b2b-lead', B2C_ECOMMERCE: 'b2c-commerce' });
+
+export const DEFAULT_COMMERCE_RULES = Object.freeze({
+  targetRoas: 3,
+  targetCpa: 20,
+  roasWatchRatio: 0.8,
+  roasHighRiskRatio: 0.6,
+  cpaWatchMultiplier: 1.2,
+  cpaHighRiskMultiplier: 1.5,
+  noPurchaseHighSpendMultiplier: 2,
+  noPurchaseStopSpendMultiplier: 3
+});
+
 export const DEFAULT_RULES = Object.freeze({
   extremeSpend: 30,
   extremeClicks: 30,
@@ -27,7 +40,7 @@ export const AD_FIELDS = [
   ['budget', '当前预算'], ['currency', '币种'], ['timezone', '时区'], ['spend', '花费'],
   ['impressions', '展示次数'], ['reach', '覆盖人数'], ['frequency', '频次'], ['allClicks', '全部点击量'],
   ['clicks', '链接点击量'], ['ctr', '链接 CTR'], ['allCtr', '全部 CTR'], ['cpc', '链接 CPC'],
-  ['cpm', 'CPM'], ['landingPageViews', 'Landing Page Views'], ['formOpens', '表单打开量'],
+  ['cpm', 'CPM'], ['landingPageViews', 'Landing Page Views'], ['placement', '版位'], ['addToCart', 'Add to Cart'], ['initiateCheckout', 'Initiate Checkout'], ['purchases', 'Purchases'], ['metaAttributedGmv', 'Meta Attributed GMV'], ['formOpens', '表单打开量'],
   ['formSubmits', '表单提交量'], ['results', 'Lead / 成效'], ['costPerResult', 'Cost Per Result'],
   ['dateStart', '报告起始日期'], ['dateEnd', '报告截止日期']
 ];
@@ -52,7 +65,7 @@ export const AD_ALIASES = {
   audienceType:['受众类型','audience type'], status:['投放状态','delivery status','status'], startTime:['开始投放时间','start time'], budget:['当前预算','budget'],
   currency:['币种','currency'], timezone:['时区','timezone'], spend:['花费','金额花费','已花费金额','已花费金额 (USD)','已花费金额（USD）','amount spent','spend','spend (usd)','amount spent (usd)'],
   impressions:['展示','展示次数','impressions'], reach:['覆盖人数','reach'], frequency:['频次','frequency'], allClicks:['全部点击量','all clicks'], clicks:['链接点击','链接点击量','link clicks','website clicks','clicks'],
-  ctr:['链接ctr','链接 CTR','link ctr','link click-through rate'], allCtr:['全部ctr','all ctr'], cpc:['链接cpc','链接 CPC','link cpc','cost per link click'], cpm:['cpm'], landingPageViews:['landing page views','落地页浏览量'],
+  ctr:['链接ctr','链接 CTR','link ctr','link click-through rate'], allCtr:['全部ctr','all ctr'], cpc:['链接cpc','链接 CPC','link cpc','cost per link click'], cpm:['cpm'], landingPageViews:['landing page views','landing page view','落地页浏览量','landing_page_view','offsite_conversion.fb_pixel_landing_page_view'], placement:['placement','版位','投放位置'], addToCart:['add to cart','adds to cart','website adds to cart','add_to_cart','offsite_conversion.fb_pixel_add_to_cart'], initiateCheckout:['initiate checkout','initiated checkout','website checkouts initiated','initiate_checkout','offsite_conversion.fb_pixel_initiate_checkout'], purchases:['purchases','purchase','website purchases','website purchase','offsite_conversion.fb_pixel_purchase'], metaAttributedGmv:['purchase conversion value','website purchase conversion value','conversion value','purchase value','meta attributed gmv','meta attributed revenue','offsite_conversion.fb_pixel_purchase_value'],
   formOpens:['表单打开量','form opens'], formSubmits:['表单提交量','form submits'], results:['成效','结果','结果（初始）','结果(初始)','线索','lead','leads','results','表单提交','潜在客户信息（表单）量','leads (form)'],
   costPerResult:['cost per result','每项成效费用'], dateStart:['报告起始日期','报告开始日期','开始日期','date start','reporting starts','reporting start'], dateEnd:['报告截止日期','报告结束日期','结束日期','date stop','reporting ends','reporting end']
 };
@@ -68,5 +81,5 @@ export function normalize(value) { return String(value ?? '').toLowerCase().repl
 export function findAliasKey(value, aliases) { const v = normalize(value); return Object.keys(aliases).find(key => aliases[key].some(alias => normalize(alias) === v)) || ''; }
 export function toNumber(value) { if (typeof value === 'number') return Number.isFinite(value) ? value : 0; const n = parseFloat(String(value ?? '').replace(/[$￥€£,\s%]/g, '')); return Number.isFinite(n) ? n : 0; }
 export function toDate(value) { if (value === null || value === undefined || value === '') return ''; if (typeof value === 'number') { if (window.XLSX?.SSF) { const d = XLSX.SSF.parse_date_code(value); if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`; } if (value > 20000 && value < 90000) return new Date(Date.UTC(1899, 11, 30) + Math.round(value * 86400000)).toISOString().slice(0, 10); } const text = String(value).trim(); const m = text.match(/(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})/); return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}` : text; }
-export function createAdRecord(raw = {}) { return { id: crypto.randomUUID(), country:'未分类', campaign:'未命名广告系列', adSet:'', ad:'', spend:0, results:0, impressions:0, reach:0, frequency:0, clicks:0, dateStart:'', dateEnd:'', sourceFile:'', sourceSheet:'', sourceRows:{}, ...raw }; }
+export function createAdRecord(raw = {}) { return { id: crypto.randomUUID(), country:'未分类', campaign:'未命名广告系列', adSet:'', ad:'', placement:'', spend:0, results:0, impressions:0, reach:0, frequency:0, clicks:0, landingPageViews:0, addToCart:0, initiateCheckout:0, purchases:0, metaAttributedGmv:0, dateStart:'', dateEnd:'', sourceFile:'', sourceSheet:'', sourceRows:{}, sourceRaw:{}, ...raw }; }
 export function createLeadRecord(raw = {}) { return { id: crypto.randomUUID(), leadId:'', submittedAt:'', campaign:'', adSet:'', ad:'', country:'', status:'', sourceFile:'', sourceRow:{}, ...raw }; }

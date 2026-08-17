@@ -42,6 +42,7 @@ const state = {
   commerceRules: { ...DEFAULT_COMMERCE_RULES },
   businessMode: localStorage.getItem(BUSINESS_MODE_KEY) === BUSINESS_MODE.B2C_ECOMMERCE ? BUSINESS_MODE.B2C_ECOMMERCE : BUSINESS_MODE.B2B_LEAD,
   commerceExpanded: { advice: false, risks: false, countries: false, campaigns: false, creatives: false },
+  commerceRiskVisibleCount: LIST_LIMIT,
   commerceRiskFilter: 'all',
   commerceSort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' },
   commerceTrendMetric: 'spend',
@@ -92,6 +93,26 @@ function commerceRules() {
 
 function commerceItems() {
   return commerceDiagnostics(selectedAds(), commerceRules(), state.commerceStopHits);
+}
+
+function commerceRiskDetailCount() {
+  const diagnosisByGroup = new Map(commerceItems().map(item => [item.id, item.d]));
+  return selectedAds().filter(row => {
+    const level = diagnosisByGroup.get(`${row.campaign}|${row.country}`)?.level || 'normal';
+    return state.commerceRiskFilter === 'all' || level === state.commerceRiskFilter;
+  }).length;
+}
+
+function advanceCommerceRiskDetailRows() {
+  const total = commerceRiskDetailCount();
+  if (state.commerceRiskVisibleCount >= total) {
+    state.commerceRiskVisibleCount = LIST_LIMIT;
+    return;
+  }
+  const next = state.commerceRiskVisibleCount <= LIST_LIMIT
+    ? 50
+    : state.commerceRiskVisibleCount + 50;
+  state.commerceRiskVisibleCount = Math.min(next, total);
 }
 
 function recordCommerceDiagnosticPass() {
@@ -220,6 +241,7 @@ function filteredRiskItems(items) {
 function resetExpandedLists() {
   state.expandedLists = { risks: false, countryQuality: false, campaigns: false };
   state.commerceExpanded = { advice: false, risks: false, countries: false, campaigns: false, creatives: false };
+  state.commerceRiskVisibleCount = LIST_LIMIT;
   state.commerceRiskFilter = 'all';
 }
 
@@ -246,7 +268,7 @@ function renderListToggle(id, key, total, { noun = '条', expandLabel = '展开�
   }
   const isExpanded = state.expandedLists[key];
   const label = isExpanded ? `${collapseLabel} ↑` : `${expandLabel}（共 ${total} ${noun}） ↓`;
-  container.innerHTML = `<button type="button" class="list-toggle" data-list-toggle="${key}">${label}</button>`;
+  container.innerHTML = `<button type="button" class="list-toggle" data-list-toggle="${key}" aria-expanded="${String(isExpanded)}">${label}</button>`;
 }
 
 function adviceItems(items) {
@@ -345,6 +367,7 @@ function renderDashboard() {
       rows,
       diagnostics: items,
       expandedLists: state.commerceExpanded,
+      riskVisibleCount: state.commerceRiskVisibleCount,
       riskFilter: state.commerceRiskFilter,
       sort: state.commerceSort,
       trendMetric: state.commerceTrendMetric
@@ -412,7 +435,7 @@ function syncCommerceSortControls() {
 function renderCommerceAnalysisOnly() {
   const rows = selectedAds();
   const items = commerceItems();
-  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskFilter: state.commerceRiskFilter, sort: state.commerceSort });
+  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskVisibleCount: state.commerceRiskVisibleCount, riskFilter: state.commerceRiskFilter, sort: state.commerceSort });
   syncCommerceSortControls();
 }
 
@@ -658,7 +681,7 @@ function switchBusinessMode(mode) {
   state.businessMode = mode;
   localStorage.setItem(BUSINESS_MODE_KEY, mode);
   document.body.dataset.businessMode = mode;
-  document.querySelectorAll('[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === mode));
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === mode));
   placeSharedFilterBar();
   populateFilters();
   dateRange();
@@ -1030,6 +1053,8 @@ function bindEvents() {
     if (!button) return;
     const key = button.dataset.listToggle;
     if (!Object.hasOwn(state.expandedLists, key)) return;
+    event.preventDefault();
+    event.stopPropagation();
     state.expandedLists[key] = !state.expandedLists[key];
     // Only refresh the affected B2B list modules. The prior full-dashboard
     // re-render plus scrollIntoView caused collapse/expand to jump the page.
@@ -1062,13 +1087,16 @@ function bindEvents() {
   $('clearDataButton').addEventListener('click', clearData);
   $('saveRulesButton').addEventListener('click', saveRules);
   $('resetRulesButton').addEventListener('click', resetRules);
-  document.querySelectorAll('[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));
   $('ecommerceView').addEventListener('click', event => {
     const listButton = event.target.closest('[data-commerce-list-toggle]');
     if (listButton) {
       const key = listButton.dataset.commerceListToggle;
       if (!Object.hasOwn(state.commerceExpanded, key)) return;
-      state.commerceExpanded[key] = !state.commerceExpanded[key];
+      event.preventDefault();
+      event.stopPropagation();
+      if (key === 'risks') advanceCommerceRiskDetailRows();
+      else state.commerceExpanded[key] = !state.commerceExpanded[key];
       if (key === 'advice') renderCommerceAdviceOnly();
       else renderCommerceAnalysisOnly();
       return;
@@ -1082,7 +1110,7 @@ function bindEvents() {
     const riskButton = event.target.closest('[data-commerce-risk-filter]');
     if (riskButton) {
       state.commerceRiskFilter = riskButton.dataset.commerceRiskFilter;
-      state.commerceExpanded.risks = false;
+      state.commerceRiskVisibleCount = LIST_LIMIT;
       renderCommerceAnalysisOnly();
       return;
     }
@@ -1112,7 +1140,7 @@ function init() {
   state.actions = loadActions(ACTION_SCOPE);
   renderRulesForm();
   placeSharedFilterBar();
-  document.querySelectorAll('[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === state.businessMode));
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === state.businessMode));
   populateFilters();
   dateRange();
   renderDashboard();

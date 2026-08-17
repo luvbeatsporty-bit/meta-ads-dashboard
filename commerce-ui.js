@@ -10,6 +10,10 @@ const byId = id => document.getElementById(id);
 
 export const visibleListItems = (items = [], expanded = false) => expanded ? items : items.slice(0, DISPLAY_LIMIT);
 export const hasMoreListItems = (items = []) => items.length > DISPLAY_LIMIT;
+export const visibleDetailItems = (items = [], visibleCount = DISPLAY_LIMIT) => {
+  const limit = Math.max(DISPLAY_LIMIT, Number(visibleCount) || DISPLAY_LIMIT);
+  return items.slice(0, Math.min(limit, items.length));
+};
 
 function metricCard(tone, label, value, note, icon) {
   return `<article class="metric ${tone}"><div class="metric-head"><small>${esc(label)}</small><i>${icon}</i></div><strong>${value}</strong><span>${esc(note)}</span><svg viewBox="0 0 150 35" aria-hidden="true"><path d="M2 28 C12 18 19 30 28 20 S44 25 56 10 S72 24 83 16 S100 9 112 20 S130 19 148 6"/></svg></article>`;
@@ -19,6 +23,18 @@ function listToggle(key, total, expanded, { noun = '条', expandLabel = '展开�
   if (total <= DISPLAY_LIMIT) return '';
   const label = expanded ? `${collapseLabel} ↑` : `${expandLabel}（共 ${total} ${noun}） ↓`;
   return `<button type="button" class="list-toggle" data-commerce-list-toggle="${key}" aria-expanded="${String(expanded)}">${label}</button>`;
+}
+
+function detailListToggle(total, visibleCount) {
+  if (total <= DISPLAY_LIMIT) return '';
+  const visible = Math.min(Math.max(DISPLAY_LIMIT, Number(visibleCount) || DISPLAY_LIMIT), total);
+  const expanded = visible > DISPLAY_LIMIT;
+  const label = visible >= total
+    ? '收起，仅显示前 5 条 ↑'
+    : expanded
+      ? `继续加载更多（已显示 ${visible} / ${total}） ↓`
+      : `展开更多广告明细（共 ${total} 条） ↓`;
+  return `<button type="button" class="list-toggle" data-commerce-list-toggle="risks" aria-expanded="${String(expanded)}">${label}</button>`;
 }
 
 function levelMeta(level) {
@@ -187,7 +203,8 @@ function setTable(hostId, headers, rows, rowHtml, emptyText, toggleId, toggleKey
   if (!table || !toggle) return;
   const visible = visibleListItems(rows, expanded);
   table.innerHTML = `<thead><tr>${headers.map(header => `<th>${esc(header)}</th>`).join('')}</tr></thead><tbody>${rows.length ? visible.map(rowHtml).join('') : `<tr><td colspan="${headers.length}"><div class="empty">${esc(emptyText)}</div></td></tr>`}</tbody>`;
-  toggle.innerHTML = listToggle(toggleKey, rows.length, expanded, { noun, expandLabel: `展开全部${noun}` });
+  const expandNoun = noun.startsWith('个') ? noun.slice(1) : noun;
+  toggle.innerHTML = listToggle(toggleKey, rows.length, expanded, { noun, expandLabel: `展开全部${expandNoun}` });
 }
 
 function renderCountryTable(rows, diagnostics, expanded, sortKey) {
@@ -216,12 +233,17 @@ function renderCommerceRiskOverview(diagnostics, selectedFilter) {
   }).join('');
 }
 
-function renderCommerceDetailTable(rows, diagnostics, expanded, riskFilter) {
+function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter) {
   const diagnosisByGroup = new Map(diagnostics.map(item => [item.id, item.d]));
   const details = rows.map(row => ({ ...row, d: diagnosisByGroup.get(`${row.campaign}|${row.country}`) || { level: 'normal', label: '正常', rule: '等待更多购买样本', advice: '当前记录尚未形成可诊断的 Campaign / 国家组合。' } }))
     .filter(row => riskFilter === 'all' || row.d.level === riskFilter)
     .sort((a, b) => RISK_ORDER[a.d.level] - RISK_ORDER[b.d.level] || Number(b.spend || 0) - Number(a.spend || 0));
-  setTable('b2cRiskTable', ['日期', '风险状态', 'Country', 'Account', 'Campaign', 'Ad Set', 'Ad', 'Creative', 'Placement', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'CPM', 'Landing Page Views', 'LPV Rate', 'Add to Cart', 'ATC Rate', 'Initiate Checkout', 'Checkout Rate', 'Purchases', 'Checkout Completion Rate', 'Purchase CVR', 'Meta GMV', 'CPA', 'AOV', 'ROAS', 'Trigger Rule', 'AI Recommendation', 'Current Status'], details, row => {
+  const table = byId('b2cRiskTable');
+  const toggle = byId('b2cRiskTableToggle');
+  if (!table || !toggle) return;
+  const visible = visibleDetailItems(details, visibleCount);
+  const headers = ['日期', '风险状态', 'Country', 'Account', 'Campaign', 'Ad Set', 'Ad', 'Creative', 'Placement', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'CPM', 'Landing Page Views', 'LPV Rate', 'Add to Cart', 'ATC Rate', 'Initiate Checkout', 'Checkout Rate', 'Purchases', 'Checkout Completion Rate', 'Purchase CVR', 'Meta GMV', 'CPA', 'AOV', 'ROAS', 'Trigger Rule', 'AI Recommendation', 'Current Status'];
+  table.innerHTML = `<thead><tr>${headers.map(header => `<th>${esc(header)}</th>`).join('')}</tr></thead><tbody>${details.length ? visible.map(row => {
     const frequency = row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—';
     const lpvRate = row.clicks ? Number(row.landingPageViews || 0) / Number(row.clicks) : null;
     const atcRate = row.landingPageViews ? Number(row.addToCart || 0) / Number(row.landingPageViews) : null;
@@ -232,18 +254,19 @@ function renderCommerceDetailTable(rows, diagnostics, expanded, riskFilter) {
     const aov = row.purchases ? Number(row.metaAttributedGmv || 0) / Number(row.purchases) : null;
     const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
     return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td><span title="${esc(row.d.rule)}">${esc(titleText(row.d.rule, 42))}</span></td><td><span title="${esc(row.d.advice)}">${esc(titleText(row.d.advice, 70))}</span></td><td>${esc(row.status || '待人工复核')}</td></tr>`;
-  }, riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。', 'b2cRiskTableToggle', 'risks', expanded, '条广告明细');
+  }).join('') : `<tr><td colspan="${headers.length}"><div class="empty">${esc(riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。')}</div></td></tr>`}</tbody>`;
+  toggle.innerHTML = detailListToggle(details.length, visibleCount);
 }
 
-export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists = {}, riskFilter = 'all', sort = {} }) {
+export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {} }) {
   renderCommerceRiskOverview(diagnostics, riskFilter);
   renderCountryTable(rows, diagnostics, Boolean(expandedLists.countries), sort.countries || 'spend');
   renderCampaignTable(rows, diagnostics, Boolean(expandedLists.campaigns), sort.campaigns || 'spend');
   renderCreativeTable(rows, diagnostics, Boolean(expandedLists.creatives), sort.creatives || 'spend');
-  renderCommerceDetailTable(rows, diagnostics, Boolean(expandedLists.risks), riskFilter);
+  renderCommerceDetailTable(rows, diagnostics, riskVisibleCount, riskFilter);
 }
 
-export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskFilter = 'all', sort = {}, trendMetric = 'spend' }) {
+export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend' }) {
   const totals = commerceTotals(rows);
   const hasData = rows.length > 0;
   const kpis = [
@@ -265,7 +288,7 @@ export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {},
   renderCommerceAdvice(diagnostics, Boolean(expandedLists.advice));
   renderCommerceTrend(rows, trendMetric);
   renderFunnel('b2cFunnelCompact', totals, true);
-  renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskFilter, sort });
+  renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskVisibleCount, riskFilter, sort });
   const source = byId('b2cDataSummary');
   if (source) source.textContent = hasData ? `已读取 ${rows.length} 条 Meta 广告记录；Meta Purchases 和 Meta Attributed GMV 不等同于店铺真实订单或 Store GMV。` : 'B2C 模式使用与 B2B 相同的 Meta 数据导入、国家、Campaign 和日期筛选条件。';
 }

@@ -124,9 +124,11 @@ assert.equal(roasFatigue.category, 'creativeFatigue', 'high frequency plus a ROA
 console.log('commerce tests passed');
 
 const listItems = Array.from({ length: 10 }, (_, index) => ({ id: index + 1 }));
-const { hasMoreListItems, renderCommerceAdvice, renderCommerceAnalysisModules, visibleListItems } = await import('../commerce-ui.js');
+const { hasMoreListItems, renderCommerceAdvice, renderCommerceAnalysisModules, visibleDetailItems, visibleListItems } = await import('../commerce-ui.js');
 assert.equal(visibleListItems(listItems, false).length, 5, 'collapsed commerce lists must use the default limit');
 assert.equal(visibleListItems(listItems, true).length, 10, 'expanded commerce lists must expose all available records');
+assert.equal(visibleDetailItems(listItems, 5).length, 5, 'collapsed commerce detail tables must use the default limit');
+assert.equal(visibleDetailItems(listItems, 50).length, 10, 'a detail-table load-more action must expose all available records when fewer than fifty exist');
 assert.equal(hasMoreListItems(listItems), true, 'a toggle should only be available when more than five records exist');
 assert.equal(hasMoreListItems(listItems.slice(0, 5)), false, 'a five-row list must not render a no-op toggle');
 
@@ -182,6 +184,7 @@ renderCommerceAnalysisModules({
   rows: dimensionRows,
   diagnostics: renderDiagnostics,
   expandedLists: { countries: false, campaigns: false, creatives: false, risks: false },
+  riskVisibleCount: 5,
   riskFilter: 'all',
   sort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' }
 });
@@ -195,6 +198,7 @@ renderCommerceAnalysisModules({
   rows: dimensionRows,
   diagnostics: renderDiagnostics,
   expandedLists: { countries: true, campaigns: true, creatives: true, risks: true },
+  riskVisibleCount: 10,
   riskFilter: 'all',
   sort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' }
 });
@@ -203,6 +207,51 @@ assert.equal((analysisHosts.get('b2cCampaignTable').innerHTML.match(/<tr>/g) || 
 assert.equal((analysisHosts.get('b2cCreativeTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded creative table must render all ten rows plus the header');
 assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded risk table must render all ten rows plus the header');
 assert.match(analysisHosts.get('b2cCountryToggle').innerHTML, /收起/, 'expanded country toggle must switch its label to collapse');
+
+const detailRows = Array.from({ length: 60 }, (_, index) => row({
+  campaign: `Detail Campaign ${index + 1}`,
+  country: `D${index + 1}`,
+  creative: `Detail Creative ${index + 1}`,
+  spend: index + 10,
+  purchases: 1,
+  metaAttributedGmv: 30
+}));
+const detailDiagnostics = detailRows.map(item => ({
+  id: `${item.campaign}|${item.country}`,
+  campaign: item.campaign,
+  country: item.country,
+  d: { level: 'watch', label: '观察', rule: '测试规则', advice: '测试建议', category: 'creative', categories: ['creative'] }
+}));
+renderCommerceAnalysisModules({
+  rows: detailRows,
+  diagnostics: detailDiagnostics,
+  expandedLists: {},
+  riskVisibleCount: 5,
+  riskFilter: 'all',
+  sort: {}
+});
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed detail table must render five rows plus the header');
+assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /展开更多广告明细/, 'collapsed detail table must offer a load-more action');
+renderCommerceAnalysisModules({
+  rows: detailRows,
+  diagnostics: detailDiagnostics,
+  expandedLists: {},
+  riskVisibleCount: 50,
+  riskFilter: 'all',
+  sort: {}
+});
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 51, 'first detail-table load-more action must render fifty rows plus the header');
+assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /继续加载更多（已显示 50 \/ 60）/, 'detail table must expose its current incremental progress');
+renderCommerceAnalysisModules({
+  rows: detailRows,
+  diagnostics: detailDiagnostics,
+  expandedLists: {},
+  riskVisibleCount: 60,
+  riskFilter: 'all',
+  sort: {}
+});
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 61, 'detail table must render every row only after explicit continued loading');
+assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /收起，仅显示前 5 条/, 'fully loaded detail table must expose a collapse action');
 
 renderCommerceAdvice(renderDiagnostics, false);
 assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 5, 'collapsed advice list must render five cards');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { extractMetaConversions } from '../commerce-mapping.js';
-import { commerceTotals, safeDivide } from '../commerce-metrics.js';
+import { commerceDimensionGroups, commerceTotals, commerceTrend, safeDivide } from '../commerce-metrics.js';
 import { diagnoseCommerceGroup, commerceDiagnostics } from '../commerce-diagnosis.js';
 import { DEFAULT_COMMERCE_RULES } from '../data-model.js';
 
@@ -122,3 +122,93 @@ const roasFatigue = diagnoseCommerceGroup({ ...frequencyHighGroup, rows: trendRo
 assert.equal(roasFatigue.category, 'creativeFatigue', 'high frequency plus a ROAS decline must flag creative fatigue');
 
 console.log('commerce tests passed');
+
+const listItems = Array.from({ length: 10 }, (_, index) => ({ id: index + 1 }));
+const { hasMoreListItems, renderCommerceAdvice, renderCommerceAnalysisModules, visibleListItems } = await import('../commerce-ui.js');
+assert.equal(visibleListItems(listItems, false).length, 5, 'collapsed commerce lists must use the default limit');
+assert.equal(visibleListItems(listItems, true).length, 10, 'expanded commerce lists must expose all available records');
+assert.equal(hasMoreListItems(listItems), true, 'a toggle should only be available when more than five records exist');
+assert.equal(hasMoreListItems(listItems.slice(0, 5)), false, 'a five-row list must not render a no-op toggle');
+
+const dimensionRows = Array.from({ length: 10 }, (_, index) => row({
+  campaign: `Campaign ${index + 1}`,
+  creative: `Creative ${index + 1}`,
+  creativeType: index % 2 ? 'Video' : 'Image',
+  country: `C${index + 1}`,
+  dateStart: '2026-08-10',
+  dateEnd: '2026-08-10',
+  spend: index + 10,
+  purchases: index + 1,
+  metaAttributedGmv: (index + 1) * 30
+}));
+assert.equal(commerceDimensionGroups(dimensionRows, 'country').length, 10, 'country analysis must retain every country group');
+assert.equal(commerceDimensionGroups(dimensionRows, 'campaign').length, 10, 'campaign analysis must retain every campaign group');
+assert.equal(commerceDimensionGroups(dimensionRows, 'creative').length, 10, 'creative analysis must retain every creative group');
+
+const trend = commerceTrend([
+  row({ dateStart: '2026-08-09', dateEnd: '2026-08-09', spend: 40, purchases: 2, metaAttributedGmv: 120 }),
+  row({ dateStart: '2026-08-10', dateEnd: '2026-08-10', spend: 60, purchases: 3, metaAttributedGmv: 240 }),
+  row({ dateStart: '2026-08-10', dateEnd: '2026-08-10', spend: 40, purchases: 1, metaAttributedGmv: 40 })
+], 'roas');
+assert.equal(trend.length, 2, 'trend data must aggregate rows by report date');
+assert.equal(trend[1].value, 2.8, 'daily ROAS must use that date’s aggregated GMV and spend');
+
+
+const createHost = () => ({ innerHTML: '' });
+const analysisHostIds = [
+  'b2cAdviceList', 'b2cAdviceToggle', 'b2cRiskDistribution',
+  'b2cCountryTable', 'b2cCountryToggle', 'b2cCampaignTable', 'b2cCampaignToggle',
+  'b2cCreativeTable', 'b2cCreativeToggle', 'b2cRiskTable', 'b2cRiskTableToggle'
+];
+const analysisHosts = new Map(analysisHostIds.map(id => [id, createHost()]));
+const originalDocument = globalThis.document;
+globalThis.document = { getElementById: id => analysisHosts.get(id) || null };
+
+const renderDiagnostics = dimensionRows.map((item, index) => ({
+  id: `${item.campaign}|${item.country}`,
+  campaign: item.campaign,
+  country: item.country,
+  d: {
+    level: index % 2 ? 'watch' : 'high',
+    label: index % 2 ? '观察' : '高风险',
+    rule: '测试规则',
+    advice: `测试建议 ${index + 1}`,
+    category: 'creative',
+    categories: ['creative']
+  }
+}));
+
+renderCommerceAnalysisModules({
+  rows: dimensionRows,
+  diagnostics: renderDiagnostics,
+  expandedLists: { countries: false, campaigns: false, creatives: false, risks: false },
+  riskFilter: 'all',
+  sort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' }
+});
+assert.equal((analysisHosts.get('b2cCountryTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed country table must render five rows plus the header');
+assert.match(analysisHosts.get('b2cCountryToggle').innerHTML, /展开全部/, 'country table must expose a real expansion toggle when more than five rows exist');
+assert.equal((analysisHosts.get('b2cCampaignTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed campaign table must render five rows plus the header');
+assert.equal((analysisHosts.get('b2cCreativeTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed creative table must render five rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed risk table must render five rows plus the header');
+
+renderCommerceAnalysisModules({
+  rows: dimensionRows,
+  diagnostics: renderDiagnostics,
+  expandedLists: { countries: true, campaigns: true, creatives: true, risks: true },
+  riskFilter: 'all',
+  sort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' }
+});
+assert.equal((analysisHosts.get('b2cCountryTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded country table must render all ten rows plus the header');
+assert.equal((analysisHosts.get('b2cCampaignTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded campaign table must render all ten rows plus the header');
+assert.equal((analysisHosts.get('b2cCreativeTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded creative table must render all ten rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded risk table must render all ten rows plus the header');
+assert.match(analysisHosts.get('b2cCountryToggle').innerHTML, /收起/, 'expanded country toggle must switch its label to collapse');
+
+renderCommerceAdvice(renderDiagnostics, false);
+assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 5, 'collapsed advice list must render five cards');
+assert.match(analysisHosts.get('b2cAdviceToggle').innerHTML, /查看全部建议/, 'advice list must expose an expansion toggle when more than five cards exist');
+renderCommerceAdvice(renderDiagnostics, true);
+assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 10, 'expanded advice list must render all cards');
+assert.match(analysisHosts.get('b2cAdviceToggle').innerHTML, /收起/, 'expanded advice toggle must switch its label to collapse');
+
+globalThis.document = originalDocument;

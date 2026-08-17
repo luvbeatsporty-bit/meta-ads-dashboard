@@ -44,6 +44,10 @@ function dateValue(row) {
   return Number.isFinite(date) ? date : null;
 }
 
+function dateKey(row) {
+  return String(row.dateEnd || row.dateStart || row.date || '').slice(0, 10);
+}
+
 export function commerceGroups(rows = [], field = 'campaign') {
   const groups = new Map();
   rows.forEach(row => {
@@ -54,10 +58,73 @@ export function commerceGroups(rows = [], field = 'campaign') {
     const group = groups.get(key);
     group.rows.push(row);
     group.countries.add(country);
-    const date = String(row.dateEnd || row.dateStart || row.date || '').slice(0, 10);
+    const date = dateKey(row);
     if (date) group.dates.add(date);
   });
   return [...groups.values()].map(group => ({ ...group, ...commerceTotals(group.rows), dayCount: group.dates.size }));
+}
+
+/**
+ * Aggregates B2C reporting dimensions for dashboard tables. This deliberately
+ * does not alter commerceGroups(), which remains the Campaign + Country input
+ * used by the commercial diagnosis engine.
+ */
+export function commerceDimensionGroups(rows = [], dimension = 'campaign') {
+  const groups = new Map();
+  const valueFor = row => {
+    if (dimension === 'country') return row.country || '未分类';
+    if (dimension === 'creative') return row.creative || row.ad || '未命名素材';
+    return row.campaign || '未分类 Campaign';
+  };
+
+  rows.forEach(row => {
+    const name = valueFor(row);
+    const key = `${dimension}:${name}`;
+    if (!groups.has(key)) groups.set(key, {
+      id: key,
+      name,
+      rows: [],
+      countries: new Set(),
+      campaigns: new Set(),
+      creativeTypes: new Set(),
+      dates: new Set()
+    });
+    const group = groups.get(key);
+    group.rows.push(row);
+    group.countries.add(row.country || '未分类');
+    group.campaigns.add(row.campaign || '未分类 Campaign');
+    if (row.creativeType) group.creativeTypes.add(row.creativeType);
+    const date = dateKey(row);
+    if (date) group.dates.add(date);
+  });
+
+  return [...groups.values()].map(group => ({
+    ...group,
+    countries: [...group.countries],
+    campaigns: [...group.campaigns],
+    creativeTypes: [...group.creativeTypes],
+    ...commerceTotals(group.rows),
+    dayCount: group.dates.size
+  }));
+}
+
+/** Returns one current-filter aggregate per reporting day for the B2C trend chart. */
+export function commerceTrend(rows = [], metric = 'spend') {
+  const byDate = new Map();
+  rows.forEach(row => {
+    const key = dateKey(row);
+    if (!key) return;
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(row);
+  });
+  const allowed = new Set(['spend', 'purchases', 'metaAttributedGmv', 'roas', 'cpa', 'purchaseCvr']);
+  const key = allowed.has(metric) ? metric : 'spend';
+  return [...byDate.entries()]
+    .sort(([one], [two]) => one.localeCompare(two))
+    .map(([date, entries]) => {
+      const totals = commerceTotals(entries);
+      return { date, value: totals[key], totals };
+    });
 }
 
 export function recentCommerceComparison(rows = []) {

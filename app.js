@@ -7,7 +7,7 @@ import { renderCharts } from './charts.js';
 import { downloadCsv } from './export.js';
 import { loadActions, saveActions, saveDashboardData, loadDashboardData } from './storage.js';
 import { commerceDiagnostics } from './commerce-diagnosis.js';
-import { renderCommerceDashboard, renderCommerceRulesForm, renderFunnelPage } from './commerce-ui.js';
+import { renderCommerceAnalysisModules, renderCommerceAdvice, renderCommerceDashboard, renderCommerceRulesForm, renderCommerceTrend, renderFunnelPage } from './commerce-ui.js';
 
 const $ = id => document.getElementById(id);
 const RULES_KEY = 'personal-ads-intelligence-rules-v1';
@@ -41,7 +41,10 @@ const state = {
   rules: { ...DEFAULT_RULES },
   commerceRules: { ...DEFAULT_COMMERCE_RULES },
   businessMode: localStorage.getItem(BUSINESS_MODE_KEY) === BUSINESS_MODE.B2C_ECOMMERCE ? BUSINESS_MODE.B2C_ECOMMERCE : BUSINESS_MODE.B2B_LEAD,
-  commerceExpanded: false,
+  commerceExpanded: { advice: false, risks: false, countries: false, campaigns: false, creatives: false },
+  commerceRiskFilter: 'all',
+  commerceSort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' },
+  commerceTrendMetric: 'spend',
   commerceStopHits: {},
   pendingLeadFiles: [],
   source: '未导入',
@@ -216,7 +219,8 @@ function filteredRiskItems(items) {
 
 function resetExpandedLists() {
   state.expandedLists = { risks: false, countryQuality: false, campaigns: false };
-  state.commerceExpanded = false;
+  state.commerceExpanded = { advice: false, risks: false, countries: false, campaigns: false, creatives: false };
+  state.commerceRiskFilter = 'all';
 }
 
 function resetDetailCharts() {
@@ -337,7 +341,15 @@ function renderDashboard() {
   if (state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE) {
     const rows = selectedAds();
     const items = commerceItems();
-    renderCommerceDashboard({ rows, diagnostics: items, expanded: state.commerceExpanded });
+    renderCommerceDashboard({
+      rows,
+      diagnostics: items,
+      expandedLists: state.commerceExpanded,
+      riskFilter: state.commerceRiskFilter,
+      sort: state.commerceSort,
+      trendMetric: state.commerceTrendMetric
+    });
+    syncCommerceSortControls();
     renderFunnelPage({ rows, diagnostics: items });
     $('statusDot').classList.toggle('ready', state.commerceAds.length > 0);
     $('statusText').textContent = state.commerceAds.length ? `${state.commerceAds.length} 条 B2C 广告记录已载入 · B2C 电商模式` : '等待导入 B2C Meta 电商报表';
@@ -376,6 +388,36 @@ function renderDashboard() {
   $('statusDot').classList.toggle('ready', haveData);
   $('statusText').textContent = haveData ? `${state.ads.length} 条广告记录已载入` : '等待导入报表';
   $('dataSourceLabel').textContent = state.source;
+}
+
+function renderB2BListModules() {
+  const rows = selectedAds();
+  const countries = summarise(rows, 'country');
+  const campaigns = summarise(rows, 'campaign');
+  const items = diagnostics();
+  const rankings = countryQualityRankings(countries, items);
+  renderTables(campaigns, rankings);
+  renderRisks(items);
+}
+
+function syncCommerceSortControls() {
+  document.querySelectorAll('[data-commerce-sort]').forEach(button => {
+    const [group, metric] = String(button.dataset.commerceSort || '').split(':');
+    const active = state.commerceSort[group] === metric;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function renderCommerceAnalysisOnly() {
+  const rows = selectedAds();
+  const items = commerceItems();
+  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskFilter: state.commerceRiskFilter, sort: state.commerceSort });
+  syncCommerceSortControls();
+}
+
+function renderCommerceAdviceOnly() {
+  renderCommerceAdvice(commerceItems(), Boolean(state.commerceExpanded.advice));
 }
 
 function renderChartToggleButtons() {
@@ -988,13 +1030,10 @@ function bindEvents() {
     if (!button) return;
     const key = button.dataset.listToggle;
     if (!Object.hasOwn(state.expandedLists, key)) return;
-    const wasExpanded = state.expandedLists[key];
-    state.expandedLists[key] = !wasExpanded;
-    renderDashboard();
-    if (wasExpanded) {
-      const moduleIds = { risks: 'riskCenter', countryQuality: 'countryQualityCard', campaigns: 'campaignRankingCard' };
-      requestAnimationFrame(() => $(moduleIds[key])?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-    }
+    state.expandedLists[key] = !state.expandedLists[key];
+    // Only refresh the affected B2B list modules. The prior full-dashboard
+    // re-render plus scrollIntoView caused collapse/expand to jump the page.
+    renderB2BListModules();
   });
   $('stopPanel').addEventListener('click', event => {
     const button = event.target.closest('[data-stop-action]');
@@ -1024,12 +1063,37 @@ function bindEvents() {
   $('saveRulesButton').addEventListener('click', saveRules);
   $('resetRulesButton').addEventListener('click', resetRules);
   document.querySelectorAll('[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));
-  $('b2cRiskCenter').addEventListener('click', event => {
-    if (!event.target.closest('[data-b2c-list-toggle]')) return;
-    const wasExpanded = state.commerceExpanded;
-    state.commerceExpanded = !wasExpanded;
-    renderDashboard();
-    if (wasExpanded) requestAnimationFrame(() => $('b2cRiskCenter')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  $('ecommerceView').addEventListener('click', event => {
+    const listButton = event.target.closest('[data-commerce-list-toggle]');
+    if (listButton) {
+      const key = listButton.dataset.commerceListToggle;
+      if (!Object.hasOwn(state.commerceExpanded, key)) return;
+      state.commerceExpanded[key] = !state.commerceExpanded[key];
+      if (key === 'advice') renderCommerceAdviceOnly();
+      else renderCommerceAnalysisOnly();
+      return;
+    }
+    const trendButton = event.target.closest('[data-commerce-trend]');
+    if (trendButton) {
+      state.commerceTrendMetric = trendButton.dataset.commerceTrend;
+      renderCommerceTrend(selectedAds(), state.commerceTrendMetric);
+      return;
+    }
+    const riskButton = event.target.closest('[data-commerce-risk-filter]');
+    if (riskButton) {
+      state.commerceRiskFilter = riskButton.dataset.commerceRiskFilter;
+      state.commerceExpanded.risks = false;
+      renderCommerceAnalysisOnly();
+      return;
+    }
+    const sortButton = event.target.closest('[data-commerce-sort]');
+    if (sortButton) {
+      const [group, metric] = String(sortButton.dataset.commerceSort || '').split(':');
+      if (!Object.hasOwn(state.commerceSort, group) || !metric) return;
+      state.commerceSort[group] = metric;
+      state.commerceExpanded[group] = false;
+      renderCommerceAnalysisOnly();
+    }
   });
 
   document.addEventListener('click', event => {

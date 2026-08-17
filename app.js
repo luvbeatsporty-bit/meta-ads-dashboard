@@ -7,13 +7,14 @@ import { renderCharts } from './charts.js';
 import { downloadCsv } from './export.js';
 import { loadActions, saveActions, saveDashboardData, loadDashboardData } from './storage.js';
 import { commerceDiagnostics } from './commerce-diagnosis.js';
-import { renderCommerceAnalysisModules, renderCommerceAdvice, renderCommerceDashboard, renderCommerceRulesForm, renderCommerceTrend, renderFunnelPage } from './commerce-ui.js';
+import { getCommerceDetail, renderCommerceAnalysisModules, renderCommerceAdvice, renderCommerceDashboard, renderCommerceRulesForm, renderCommerceTrend, renderFunnelPage } from './commerce-ui.js';
 
 const $ = id => document.getElementById(id);
 const RULES_KEY = 'personal-ads-intelligence-rules-v1';
 const BUSINESS_MODE_KEY = 'personal-ads-intelligence-business-mode-v1';
 const COMMERCE_STOP_HITS_KEY = 'personal-ads-intelligence-commerce-stop-hits-v1';
 const ACTION_SCOPE = 'default';
+const COMMERCE_ACTION_SCOPE = 'b2c';
 const LIST_LIMIT = 5;
 const RULE_INPUTS = {
   extremeSpend: 'extremeSpendRule',
@@ -38,6 +39,7 @@ const state = {
   matches: [],
   charts: {},
   actions: {},
+  commerceActions: {},
   rules: { ...DEFAULT_RULES },
   commerceRules: { ...DEFAULT_COMMERCE_RULES },
   businessMode: localStorage.getItem(BUSINESS_MODE_KEY) === BUSINESS_MODE.B2C_ECOMMERCE ? BUSINESS_MODE.B2C_ECOMMERCE : BUSINESS_MODE.B2B_LEAD,
@@ -370,7 +372,8 @@ function renderDashboard() {
       riskVisibleCount: state.commerceRiskVisibleCount,
       riskFilter: state.commerceRiskFilter,
       sort: state.commerceSort,
-      trendMetric: state.commerceTrendMetric
+      trendMetric: state.commerceTrendMetric,
+      actions: state.commerceActions
     });
     syncCommerceSortControls();
     renderFunnelPage({ rows, diagnostics: items });
@@ -435,7 +438,7 @@ function syncCommerceSortControls() {
 function renderCommerceAnalysisOnly() {
   const rows = selectedAds();
   const items = commerceItems();
-  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskVisibleCount: state.commerceRiskVisibleCount, riskFilter: state.commerceRiskFilter, sort: state.commerceSort });
+  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskVisibleCount: state.commerceRiskVisibleCount, riskFilter: state.commerceRiskFilter, sort: state.commerceSort, actions: state.commerceActions });
   syncCommerceSortControls();
 }
 
@@ -496,6 +499,7 @@ function actionLabel(action) {
   const labels = {
     handled: '已标记人工处理',
     watch: '保持观察',
+    manualPause: '已记录人工暂停意向（未执行 Meta 操作）',
     ignore: '已忽略本次提醒'
   };
   return `${labels[action]} · ${time}`;
@@ -511,6 +515,52 @@ function saveAction(id, action) {
   state.actions[id] = actionLabel(action);
   saveActions(ACTION_SCOPE, state.actions);
   toast(state.actions[id]);
+}
+
+function saveCommerceAction(id, action) {
+  if (!id) return;
+  if (action === 'restore') {
+    delete state.commerceActions[id];
+    saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+    toast('B2C 已恢复为待人工复核');
+    return;
+  }
+  state.commerceActions[id] = actionLabel(action);
+  saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+  toast(`B2C：${state.commerceActions[id]}`);
+}
+
+function closeCommerceDetail() {
+  $('commerceDetailModal')?.classList.remove('open');
+}
+
+function renderCommerceDetailModal(detail) {
+  if (!detail) return;
+  const context = Array.isArray(detail.context) ? detail.context : [];
+  const currentAction = detail.actionId ? state.commerceActions[detail.actionId] : '';
+  $('commerceDetailEyebrow').textContent = detail.eyebrow || 'B2C DIAGNOSTIC DETAIL';
+  $('commerceDetailTitle').textContent = detail.title || '诊断详情';
+  $('commerceDetailContent').innerHTML = `
+    ${context.length ? `<dl class="commerce-detail-context">${context.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>` : ''}
+    <section class="commerce-detail-section"><h3>触发规则 / 风险原因</h3><p class="commerce-detail-copy">${esc(detail.rule || '—')}</p></section>
+    <section class="commerce-detail-section"><h3>AI 优化建议</h3><p class="commerce-detail-copy">${esc(detail.recommendation || detail.text || '—')}</p></section>
+    <section class="commerce-detail-section"><h3>建议操作</h3><p class="commerce-detail-copy">${esc(detail.recommendedAction || '继续观察')}</p></section>
+  `;
+  $('commerceDetailActions').dataset.commerceDetailId = detail.id || '';
+  $('commerceDetailActions').innerHTML = detail.stopCandidate && detail.actionId ? `
+    <span class="mini-note">${esc(currentAction || '待人工确认')} · 仅记录人工处理，不会调用 Meta 暂停接口</span>
+    <button type="button" class="small-btn" data-commerce-action="handled" data-commerce-action-id="${esc(detail.actionId)}">标记已处理</button>
+    <button type="button" class="small-btn" data-commerce-action="watch" data-commerce-action-id="${esc(detail.actionId)}">保持观察</button>
+    <button type="button" class="small-btn" data-commerce-action="manualPause" data-commerce-action-id="${esc(detail.actionId)}">人工暂停</button>
+    <button type="button" class="small-btn" data-commerce-action="ignore" data-commerce-action-id="${esc(detail.actionId)}">忽略本次提醒</button>
+  ` : '';
+}
+
+function openCommerceDetail(detailId) {
+  const detail = getCommerceDetail(detailId);
+  if (!detail) return;
+  renderCommerceDetailModal(detail);
+  $('commerceDetailModal').classList.add('open');
 }
 
 function renderRisks(items) {
@@ -739,7 +789,9 @@ function saveRules() {
     if (next.roasWatchRatio < 0 || next.roasWatchRatio > 1 || next.roasHighRiskRatio < 0 || next.roasHighRiskRatio > 1) { toast('ROAS 比例必须在 0 到 1 之间。'); return; }
     if (next.roasHighRiskRatio > next.roasWatchRatio) { toast('高风险 ROAS 比例不能高于观察 ROAS 比例。'); return; }
     if (next.cpaHighRiskMultiplier < next.cpaWatchMultiplier) { toast('CPA 高风险倍数必须大于或等于观察倍数。'); return; }
-    if (next.noPurchaseStopSpendMultiplier < next.noPurchaseHighSpendMultiplier) { toast('无购买自动关停候选倍数必须大于或等于高风险花费倍数。'); return; }
+    if (next.noPurchaseStopSpendMultiplier < next.noPurchaseHighSpendMultiplier) { toast('无购买关停候选倍数必须大于或等于高风险花费倍数。'); return; }
+    if (next.highCpaStopMultiplier < next.cpaHighRiskMultiplier) { toast('高 CPA 关停候选倍数必须大于或等于 CPA 高风险倍数。'); return; }
+    if (next.lowRoasStopRatio > next.roasHighRiskRatio) { toast('极低 ROAS 倍数不能高于高风险 ROAS 比例。'); return; }
     state.commerceRules = next;
     state.rules = nextFrequencyRules;
     recordCommerceDiagnosticPass();
@@ -962,7 +1014,8 @@ function bindEvents() {
   $('cancelMappingButton').addEventListener('click', () => $('mappingModal').classList.remove('open'));
   $('viewAllAdviceButton').addEventListener('click', () => { state.adviceFilter = 'all'; renderAdviceModal(); $('adviceModal').classList.add('open'); });
   $('closeAdvice').addEventListener('click', () => $('adviceModal').classList.remove('open'));
-  ['guideModal', 'mappingModal', 'adviceModal'].forEach(id => $(id).addEventListener('click', event => {
+  $('closeCommerceDetail').addEventListener('click', closeCommerceDetail);
+  ['guideModal', 'mappingModal', 'adviceModal', 'commerceDetailModal'].forEach(id => $(id).addEventListener('click', event => {
     if (event.target === $(id)) $(id).classList.remove('open');
   }));
   $('adviceFilterBar').addEventListener('click', event => {
@@ -1089,6 +1142,21 @@ function bindEvents() {
   $('resetRulesButton').addEventListener('click', resetRules);
   document.querySelectorAll('button[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));
   $('ecommerceView').addEventListener('click', event => {
+    const detailButton = event.target.closest('[data-commerce-detail-id]');
+    if (detailButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      openCommerceDetail(detailButton.dataset.commerceDetailId);
+      return;
+    }
+    const actionButton = event.target.closest('[data-commerce-action]');
+    if (actionButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveCommerceAction(actionButton.dataset.commerceActionId, actionButton.dataset.commerceAction);
+      renderCommerceAnalysisOnly();
+      return;
+    }
     const listButton = event.target.closest('[data-commerce-list-toggle]');
     if (listButton) {
       const key = listButton.dataset.commerceListToggle;
@@ -1123,6 +1191,17 @@ function bindEvents() {
       renderCommerceAnalysisOnly();
     }
   });
+  $('commerceDetailActions').addEventListener('click', event => {
+    const actionButton = event.target.closest('[data-commerce-action]');
+    if (!actionButton) return;
+    event.preventDefault();
+    event.stopPropagation();
+    saveCommerceAction(actionButton.dataset.commerceActionId, actionButton.dataset.commerceAction);
+    renderCommerceAnalysisOnly();
+    const detail = getCommerceDetail($('commerceDetailActions').dataset.commerceDetailId || '');
+    if (detail) renderCommerceDetailModal(detail);
+    else closeCommerceDetail();
+  });
 
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-view]');
@@ -1138,6 +1217,7 @@ function init() {
   state.commerceStopHits = loadCommerceStopHits();
   document.body.dataset.businessMode = state.businessMode;
   state.actions = loadActions(ACTION_SCOPE);
+  state.commerceActions = loadActions(COMMERCE_ACTION_SCOPE);
   renderRulesForm();
   placeSharedFilterBar();
   document.querySelectorAll('button[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === state.businessMode));

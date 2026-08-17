@@ -9,17 +9,60 @@ const LEVEL_META = Object.freeze({
 
 const RISK_EPSILON = 1e-9;
 
-function signal(level, category, rule, advice) { return { level, category, rule, advice }; }
+function signal(level, category, rule, advice, options = {}) {
+  return {
+    level,
+    category,
+    rule,
+    advice,
+    stopCandidate: false,
+    autoStopCandidate: false,
+    recommendedAction: '',
+    ...options
+  };
+}
 function below(value, threshold) { return value < threshold - RISK_EPSILON; }
 function stronger(one, two) { return COMMERCE_RISK_ORDER[one.level] < COMMERCE_RISK_ORDER[two.level] ? one : two; }
 
-function commercialSignal(metrics, rules, stopHits = 0, dayCount = 0) {
+function hasCompleteDiagnosticData(metrics) {
+  return Boolean(
+    metrics.rows?.length &&
+    metrics.dayCount >= 2 &&
+    metrics.rows.every(row => {
+      const date = String(row.dateEnd || row.dateStart || row.date || '').slice(0, 10);
+      return Boolean(date) && Number.isFinite(Number(row.spend)) && Number.isFinite(Number(row.purchases));
+    })
+  );
+}
+
+function stopCandidate(level, category, rule, advice) {
+  return signal(level, category, rule, advice, {
+    stopCandidate: true,
+    autoStopCandidate: false,
+    recommendedAction: '人工确认后暂停广告'
+  });
+}
+
+function commercialSignal(metrics, rules, _stopHits = 0, dayCount = 0) {
   const targetRoas = rules.targetRoas;
   const targetCpa = rules.targetCpa;
   const noPurchase = metrics.purchases === 0;
   const hasSample = metrics.spend >= targetCpa;
-  const stopEligible = noPurchase && metrics.spend >= targetCpa * rules.noPurchaseStopSpendMultiplier && dayCount >= 2 && stopHits >= 2;
-  if (stopEligible) return signal('extreme', 'noPurchase', `花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、无 Purchase，且连续两次检查均满足最低运行样本`, '广告已达到无购买自动暂停候选条件。请人工复核素材、商品页和支付链路；是否暂停仍由现有自动化开关控制。');
+  const minPurchaseSample = rules.minimumPurchaseSample ?? 3;
+  const minimumRuntimeMet = dayCount >= 2 && hasCompleteDiagnosticData({ ...metrics, dayCount });
+  const requiredSpend = targetCpa * rules.noPurchaseStopSpendMultiplier;
+
+  // B2C only flags candidates for a person to handle. It never requests or
+  // reports an automatic Meta pause, and it intentionally ignores stopHits.
+  if (noPurchase && metrics.spend >= requiredSpend && minimumRuntimeMet) {
+    return stopCandidate('extreme', 'noPurchase', `花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、Purchase = 0，且已满足最低运行期`, `当前广告花费已经达到目标 CPA 的 ${rules.noPurchaseStopSpendMultiplier} 倍，但仍未产生任何购买，继续投放存在明显预算浪费风险。建议人工确认后暂停该广告。`);
+  }
+  if (metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && metrics.roas !== null && below(metrics.roas, targetRoas * rules.lowRoasStopRatio) && minimumRuntimeMet) {
+    return stopCandidate('extreme', 'roas', `Purchases ≥ ${minPurchaseSample}、花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、ROAS < 目标 ROAS × ${rules.lowRoasStopRatio}`, '当前广告已经产生一定购买样本，但 ROAS 长时间明显低于目标值，继续投放可能持续亏损。建议人工复核后考虑暂停。');
+  }
+  if (metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && metrics.cpa !== null && metrics.cpa >= targetCpa * rules.highCpaStopMultiplier && minimumRuntimeMet) {
+    return stopCandidate('extreme', 'cpa', `Purchases ≥ ${minPurchaseSample}、花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、CPA ≥ 目标 CPA × ${rules.highCpaStopMultiplier}`, `当前广告单次购买成本已达到目标 CPA 的 ${rules.highCpaStopMultiplier} 倍或以上，且已有足够购买样本，建议人工检查后考虑暂停或降低预算。`);
+  }
   if (noPurchase && metrics.spend >= targetCpa * rules.noPurchaseHighSpendMultiplier) return signal('high', 'noPurchase', `花费 ≥ 目标 CPA × ${rules.noPurchaseHighSpendMultiplier} 且 Purchase = 0`, '当前广告花费已达到目标购买成本的两倍，但仍没有产生购买。建议优先检查素材点击质量、产品页、价格、加购和支付流程。');
   if (metrics.cpa !== null && metrics.cpa > targetCpa * rules.cpaHighRiskMultiplier) return signal('high', 'cpa', `CPA > 目标 CPA × ${rules.cpaHighRiskMultiplier}`, '当前单次购买成本已经明显高于目标 CPA，请检查 CTR、落地页、加购、结账和最终购买环节，定位成本上涨发生在哪一层。');
   if (metrics.roas !== null && hasSample && below(metrics.roas, targetRoas * rules.roasHighRiskRatio)) return signal('high', 'roas', `ROAS < 目标 ROAS × ${rules.roasHighRiskRatio}`, '当前广告回报明显低于目标，需要重点检查 CPA、购买转化漏斗、商品页面和素材表现。');
@@ -60,16 +103,16 @@ export function diagnoseCommerceGroup(group, rules = DEFAULT_COMMERCE_RULES, sto
   if (fatigue.signal && COMMERCE_RISK_ORDER[fatigue.signal.level] < COMMERCE_RISK_ORDER[candidate.level]) candidate = fatigue.signal;
   if (candidate.level === 'normal' && funnel) candidate = stronger(candidate, funnel);
   const related = [commercial, funnel, fatigue.signal].filter(Boolean).filter(item => item !== candidate && item.category !== 'normal');
-  const [label, status] = LEVEL_META[candidate.level];
+  const [baseLabel, status] = LEVEL_META[candidate.level];
   return {
     ...candidate,
-    label,
+    label: candidate.stopCandidate ? '极高风险 · 关停候选' : baseLabel,
     status,
     frequency7d: fatigue.frequency.frequency7d,
     categories: [...new Set([candidate.category, ...related.map(item => item.category)])],
     rule: [candidate.rule, ...related.map(item => item.rule)].filter(Boolean).join('；'),
     advice: [candidate.advice, ...related.map(item => item.advice)].filter(Boolean).join(' 同时，'),
-    autoStopCandidate: candidate.level === 'extreme'
+    autoStopCandidate: false
   };
 }
 

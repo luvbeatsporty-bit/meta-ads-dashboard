@@ -66,9 +66,39 @@ const noPurchaseGroup = {
   spend: 60, impressions: 20000, reach: 8000, linkClicks: 400, landingPageViews: 300, addToCart: 20, initiateCheckout: 10,
   purchases: 0, metaAttributedGmv: 0, cpa: null, roas: 0, ctr: 0.02, dayCount: 2
 };
-assert.equal(diagnoseCommerceGroup(noPurchaseGroup, rules, 0).level, 'high', 'no purchase spend at 3× CPA is high before consecutive checks');
-assert.equal(diagnoseCommerceGroup(noPurchaseGroup, rules, 1).level, 'high', 'one qualifying check is not enough for stop candidacy');
-assert.equal(diagnoseCommerceGroup(noPurchaseGroup, rules, 2).level, 'extreme', 'two qualifying checks create a stop candidate');
+const noPurchaseCandidate = diagnoseCommerceGroup(noPurchaseGroup, rules);
+assert.equal(noPurchaseCandidate.level, 'extreme', 'no purchase spend at 3× CPA must be an extreme-risk manual stop candidate');
+assert.equal(noPurchaseCandidate.stopCandidate, true, 'no-purchase commercial result must mark a stop candidate');
+assert.equal(noPurchaseCandidate.autoStopCandidate, false, 'B2C candidates must never request automatic Meta pauses');
+assert.match(noPurchaseCandidate.label, /关停候选/, 'stop candidates must have the manual-review label');
+
+const highCpaCandidateGroup = {
+  ...noPurchaseGroup,
+  id: 'High CPA|US',
+  rows: [
+    row({ campaign: 'High CPA', dateStart: '2026-08-09', dateEnd: '2026-08-09', spend: 120, purchases: 3, metaAttributedGmv: 240 }),
+    row({ campaign: 'High CPA', dateStart: '2026-08-10', dateEnd: '2026-08-10', spend: 120, purchases: 3, metaAttributedGmv: 240 })
+  ],
+  spend: 240, purchases: 6, metaAttributedGmv: 480, cpa: 40, roas: 2, dayCount: 2
+};
+const highCpaCandidate = diagnoseCommerceGroup(highCpaCandidateGroup, rules);
+assert.equal(highCpaCandidate.stopCandidate, true, 'CPA at 2× target with enough purchases must be a stop candidate');
+assert.equal(highCpaCandidate.autoStopCandidate, false, 'high CPA candidates must remain manual only');
+assert.equal(highCpaCandidate.category, 'cpa', 'high CPA candidate must retain the commercial trigger type');
+
+const lowRoasCandidateGroup = {
+  ...noPurchaseGroup,
+  id: 'Low ROAS|US',
+  rows: [
+    row({ campaign: 'Low ROAS', dateStart: '2026-08-09', dateEnd: '2026-08-09', spend: 120, purchases: 2, metaAttributedGmv: 48 }),
+    row({ campaign: 'Low ROAS', dateStart: '2026-08-10', dateEnd: '2026-08-10', spend: 120, purchases: 2, metaAttributedGmv: 48 })
+  ],
+  spend: 240, purchases: 4, metaAttributedGmv: 96, cpa: 60, roas: 0.4, dayCount: 2
+};
+const lowRoasCandidate = diagnoseCommerceGroup(lowRoasCandidateGroup, rules);
+assert.equal(lowRoasCandidate.stopCandidate, true, 'ROAS below 0.5× target with enough purchases must be a stop candidate');
+assert.equal(lowRoasCandidate.autoStopCandidate, false, 'low ROAS candidates must remain manual only');
+assert.equal(lowRoasCandidate.category, 'roas', 'low ROAS candidate must retain the commercial trigger type');
 
 const frequencyOnlyGroup = {
   ...noPurchaseGroup,
@@ -80,7 +110,10 @@ const frequencyOnlyGroup = {
   ],
   dayCount: 2
 };
-assert.notEqual(diagnoseCommerceGroup(frequencyOnlyGroup, rules, 2).level, 'extreme', 'frequency must never independently create an auto-stop candidate');
+const frequencyOnlyDiagnosis = diagnoseCommerceGroup(frequencyOnlyGroup, rules);
+assert.notEqual(frequencyOnlyDiagnosis.level, 'extreme', 'frequency must never independently create a stop candidate');
+assert.equal(frequencyOnlyDiagnosis.stopCandidate, false, 'frequency alone must not create a manual stop candidate');
+assert.equal(frequencyOnlyDiagnosis.autoStopCandidate, false, 'frequency alone must never request an automatic Meta pause');
 
 const frequencyNormalGroup = {
   ...frequencyOnlyGroup,
@@ -192,7 +225,8 @@ assert.equal((analysisHosts.get('b2cCountryTable').innerHTML.match(/<tr>/g) || [
 assert.match(analysisHosts.get('b2cCountryToggle').innerHTML, /展开全部/, 'country table must expose a real expansion toggle when more than five rows exist');
 assert.equal((analysisHosts.get('b2cCampaignTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed campaign table must render five rows plus the header');
 assert.equal((analysisHosts.get('b2cCreativeTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed creative table must render five rows plus the header');
-assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed risk table must render five rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 5, 'collapsed risk tbody must render five data rows only');
+assert.doesNotMatch(analysisHosts.get('b2cRiskTable').innerHTML, /<thead>/, 'risk tbody must not contain a duplicate header');
 
 renderCommerceAnalysisModules({
   rows: dimensionRows,
@@ -205,7 +239,7 @@ renderCommerceAnalysisModules({
 assert.equal((analysisHosts.get('b2cCountryTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded country table must render all ten rows plus the header');
 assert.equal((analysisHosts.get('b2cCampaignTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded campaign table must render all ten rows plus the header');
 assert.equal((analysisHosts.get('b2cCreativeTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded creative table must render all ten rows plus the header');
-assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 11, 'expanded risk table must render all ten rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 10, 'expanded risk tbody must render all ten data rows only');
 assert.match(analysisHosts.get('b2cCountryToggle').innerHTML, /收起/, 'expanded country toggle must switch its label to collapse');
 
 const detailRows = Array.from({ length: 60 }, (_, index) => row({
@@ -230,7 +264,7 @@ renderCommerceAnalysisModules({
   riskFilter: 'all',
   sort: {}
 });
-assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 6, 'collapsed detail table must render five rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 5, 'collapsed detail tbody must render five data rows only');
 assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /展开更多广告明细/, 'collapsed detail table must offer a load-more action');
 renderCommerceAnalysisModules({
   rows: detailRows,
@@ -240,7 +274,7 @@ renderCommerceAnalysisModules({
   riskFilter: 'all',
   sort: {}
 });
-assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 51, 'first detail-table load-more action must render fifty rows plus the header');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 50, 'first detail-table load-more action must render fifty data rows only');
 assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /继续加载更多（已显示 50 \/ 60）/, 'detail table must expose its current incremental progress');
 renderCommerceAnalysisModules({
   rows: detailRows,
@@ -250,7 +284,7 @@ renderCommerceAnalysisModules({
   riskFilter: 'all',
   sort: {}
 });
-assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 61, 'detail table must render every row only after explicit continued loading');
+assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 60, 'detail tbody must render every data row only after explicit continued loading');
 assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /收起，仅显示前 5 条/, 'fully loaded detail table must expose a collapse action');
 
 renderCommerceAdvice(renderDiagnostics, false);

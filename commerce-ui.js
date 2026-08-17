@@ -8,6 +8,60 @@ const rate = value => value === null || value === undefined ? '—' : pct(value)
 const fixed = value => value === null || value === undefined ? '—' : Number(value).toFixed(2);
 const byId = id => document.getElementById(id);
 
+// Detail payloads stay in memory only. They power B2C full-text viewing without
+// adding long, repetitive copy to every table cell or affecting B2B actions.
+const commerceDetailEntries = new Map();
+let commerceDetailSequence = 0;
+
+function registerCommerceDetail(payload) {
+  const id = `commerce-detail-${++commerceDetailSequence}`;
+  commerceDetailEntries.set(id, { id, ...payload });
+  return id;
+}
+
+export function getCommerceDetail(id) {
+  return commerceDetailEntries.get(id) || null;
+}
+
+function detailTextCell(title, text, payload = {}, limit = 70) {
+  const fullText = String(text || '—');
+  const id = registerCommerceDetail({ title, text: fullText, ...payload });
+  return `<div class="truncated-detail"><span title="${esc(fullText)}">${esc(titleText(fullText, limit))}</span><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${id}">查看全文</button></div>`;
+}
+
+function commerceActionId(row) {
+  return `b2c:${row.campaign || '未命名 Campaign'}|${row.country || '未分类'}`;
+}
+
+function detailPayloadForRow(row, diagnosis) {
+  const cpa = row.purchases ? Number(row.spend || 0) / Number(row.purchases) : null;
+  const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
+  return {
+    title: diagnosis.stopCandidate ? '关停候选诊断详情' : 'B2C 诊断详情',
+    eyebrow: diagnosis.stopCandidate ? 'EXTREME RISK · MANUAL REVIEW' : 'B2C DIAGNOSTIC DETAIL',
+    text: diagnosis.advice || '—',
+    rule: diagnosis.rule || '—',
+    recommendation: diagnosis.advice || '—',
+    recommendedAction: diagnosis.recommendedAction || '继续观察',
+    stopCandidate: Boolean(diagnosis.stopCandidate),
+    actionId: commerceActionId(row),
+    context: [
+      ['Campaign', row.campaign || '—'], ['Country', row.country || '—'], ['风险状态', diagnosis.label || levelMeta(diagnosis.level)[0]],
+      ['Spend', money(row.spend)], ['Purchases', integer(row.purchases)], ['CPA', money(cpa)], ['ROAS', roas === null ? '—' : `${fixed(roas)}×`],
+      ['Frequency', row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—']
+    ]
+  };
+}
+
+function candidateStatusCell(row, diagnosis, actions = {}) {
+  if (!diagnosis.stopCandidate) return esc(actions[commerceActionId(row)] || row.status || '待人工复核');
+  const payload = detailPayloadForRow(row, diagnosis);
+  const detailId = registerCommerceDetail(payload);
+  const actionId = payload.actionId;
+  const saved = actions[actionId];
+  return `<div class="commerce-candidate-status"><span>${esc(saved || '待人工确认')}</span><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${detailId}">查看详情</button><div class="commerce-action-links"><button type="button" class="small-btn" data-commerce-action="handled" data-commerce-action-id="${esc(actionId)}">标记已处理</button><button type="button" class="small-btn" data-commerce-action="watch" data-commerce-action-id="${esc(actionId)}">保持观察</button><button type="button" class="small-btn" data-commerce-action="manualPause" data-commerce-action-id="${esc(actionId)}">人工暂停</button><button type="button" class="small-btn" data-commerce-action="ignore" data-commerce-action-id="${esc(actionId)}">忽略本次提醒</button></div></div>`;
+}
+
 export const visibleListItems = (items = [], expanded = false) => expanded ? items : items.slice(0, DISPLAY_LIMIT);
 export const hasMoreListItems = (items = []) => items.length > DISPLAY_LIMIT;
 export const visibleDetailItems = (items = [], visibleCount = DISPLAY_LIMIT) => {
@@ -169,9 +223,10 @@ export function renderCommerceAdvice(diagnostics, expanded = false) {
     toggle.innerHTML = '';
     return;
   }
-  host.innerHTML = visibleListItems(items, expanded).map(item => `
-    <article class="advice-card ${riskClass(item.level)}"><span class="advice-icon">${item.level === 'excellent' ? '↗' : item.level === 'watch' ? '◷' : '!'}</span><span class="advice-copy"><span class="advice-label">${esc(item.title)}</span><h3>${esc(levelMeta(item.level)[0])} · ${esc(item.title)}</h3><small>${esc(item.meta)}</small><p>${esc(item.text)}</p></span></article>
-  `).join('');
+  host.innerHTML = visibleListItems(items, expanded).map(item => {
+    const detailId = registerCommerceDetail({ title: 'AI 优化建议', eyebrow: 'B2C AI RECOMMENDATION', text: item.text, rule: item.meta, recommendation: item.text, context: [['风险级别', levelMeta(item.level)[0]], ['建议类型', item.title]] });
+    return `<article class="advice-card ${riskClass(item.level)}"><span class="advice-icon">${item.level === 'excellent' ? '↗' : item.level === 'watch' ? '◷' : '!'}</span><span class="advice-copy"><span class="advice-label">${esc(item.title)}</span><h3>${esc(levelMeta(item.level)[0])} · ${esc(item.title)}</h3><small>${esc(item.meta)}</small><p>${esc(titleText(item.text, 150))}</p><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${detailId}">查看完整建议</button></span></article>`;
+  }).join('');
   toggle.innerHTML = listToggle('advice', items.length, expanded, { noun: '条建议', expandLabel: '查看全部建议' });
 }
 
@@ -209,17 +264,17 @@ function setTable(hostId, headers, rows, rowHtml, emptyText, toggleId, toggleKey
 
 function renderCountryTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'country', sortKey);
-  setTable('b2cCountryTable', ['Country', 'Spend', 'Purchases', 'Meta GMV', 'ROAS', 'CPA', 'AOV', 'CTR', 'CPC', 'Frequency', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td>${esc(group.name)}</td><td>${money(group.spend)}</td><td>${integer(group.purchases)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${money(group.cpa)}</td><td>${money(group.aov)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${riskBadge(group.d)}</td><td><span title="${esc(group.d.advice)}">${esc(titleText(group.d.advice, 70))}</span></td></tr>`, '当前筛选条件下没有国家 / 地区数据。', 'b2cCountryToggle', 'countries', expanded, '个国家');
+  setTable('b2cCountryTable', ['Country', 'Spend', 'Purchases', 'Meta GMV', 'ROAS', 'CPA', 'AOV', 'CTR', 'CPC', 'Frequency', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td>${esc(group.name)}</td><td>${money(group.spend)}</td><td>${integer(group.purchases)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${money(group.cpa)}</td><td>${money(group.aov)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'COUNTRY DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Country', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有国家 / 地区数据。', 'b2cCountryToggle', 'countries', expanded, '个国家');
 }
 
 function renderCampaignTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'campaign', sortKey);
-  setTable('b2cCampaignTable', ['Campaign', 'Countries', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'LPV', 'ATC', 'Checkout', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.countries.join(', '))}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${integer(group.linkClicks)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.landingPageViews)}</td><td>${integer(group.addToCart)}</td><td>${integer(group.initiateCheckout)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td><span title="${esc(group.d.advice)}">${esc(titleText(group.d.advice, 70))}</span></td></tr>`, '当前筛选条件下没有 Campaign 数据。', 'b2cCampaignToggle', 'campaigns', expanded, '个 Campaign');
+  setTable('b2cCampaignTable', ['Campaign', 'Countries', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'LPV', 'ATC', 'Checkout', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.countries.join(', '))}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${integer(group.linkClicks)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.landingPageViews)}</td><td>${integer(group.addToCart)}</td><td>${integer(group.initiateCheckout)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'CAMPAIGN DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Campaign', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有 Campaign 数据。', 'b2cCampaignToggle', 'campaigns', expanded, '个 Campaign');
 }
 
 function renderCreativeTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'creative', sortKey);
-  setTable('b2cCreativeTable', ['Creative / Ad', 'Creative Type', 'Spend', 'Impressions', 'Reach', 'Frequency', 'CTR', 'CPC', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.creativeTypes.join(', ') || '—')}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td><span title="${esc(group.d.advice)}">${esc(titleText(group.d.advice, 70))}</span></td></tr>`, '当前筛选条件下没有素材数据。', 'b2cCreativeToggle', 'creatives', expanded, '个素材');
+  setTable('b2cCreativeTable', ['Creative / Ad', 'Creative Type', 'Spend', 'Impressions', 'Reach', 'Frequency', 'CTR', 'CPC', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.creativeTypes.join(', ') || '—')}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'CREATIVE DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Creative', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有素材数据。', 'b2cCreativeToggle', 'creatives', expanded, '个素材');
 }
 
 function renderCommerceRiskOverview(diagnostics, selectedFilter) {
@@ -233,7 +288,7 @@ function renderCommerceRiskOverview(diagnostics, selectedFilter) {
   }).join('');
 }
 
-function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter) {
+function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter, actions = {}) {
   const diagnosisByGroup = new Map(diagnostics.map(item => [item.id, item.d]));
   const details = rows.map(row => ({ ...row, d: diagnosisByGroup.get(`${row.campaign}|${row.country}`) || { level: 'normal', label: '正常', rule: '等待更多购买样本', advice: '当前记录尚未形成可诊断的 Campaign / 国家组合。' } }))
     .filter(row => riskFilter === 'all' || row.d.level === riskFilter)
@@ -242,8 +297,9 @@ function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter) 
   const toggle = byId('b2cRiskTableToggle');
   if (!table || !toggle) return;
   const visible = visibleDetailItems(details, visibleCount);
-  const headers = ['日期', '风险状态', 'Country', 'Account', 'Campaign', 'Ad Set', 'Ad', 'Creative', 'Placement', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'CPM', 'Landing Page Views', 'LPV Rate', 'Add to Cart', 'ATC Rate', 'Initiate Checkout', 'Checkout Rate', 'Purchases', 'Checkout Completion Rate', 'Purchase CVR', 'Meta GMV', 'CPA', 'AOV', 'ROAS', 'Trigger Rule', 'AI Recommendation', 'Current Status'];
-  table.innerHTML = `<thead><tr>${headers.map(header => `<th>${esc(header)}</th>`).join('')}</tr></thead><tbody>${details.length ? visible.map(row => {
+  const columnCount = 33;
+  // #b2cRiskTable is the tbody. The one static thead in index.html is intentional.
+  table.innerHTML = details.length ? visible.map(row => {
     const frequency = row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—';
     const lpvRate = row.clicks ? Number(row.landingPageViews || 0) / Number(row.clicks) : null;
     const atcRate = row.landingPageViews ? Number(row.addToCart || 0) / Number(row.landingPageViews) : null;
@@ -253,20 +309,21 @@ function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter) 
     const cpa = row.purchases ? Number(row.spend || 0) / Number(row.purchases) : null;
     const aov = row.purchases ? Number(row.metaAttributedGmv || 0) / Number(row.purchases) : null;
     const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
-    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td><span title="${esc(row.d.rule)}">${esc(titleText(row.d.rule, 42))}</span></td><td><span title="${esc(row.d.advice)}">${esc(titleText(row.d.advice, 70))}</span></td><td>${esc(row.status || '待人工复核')}</td></tr>`;
-  }).join('') : `<tr><td colspan="${headers.length}"><div class="empty">${esc(riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。')}</div></td></tr>`}</tbody>`;
+    const payload = detailPayloadForRow(row, row.d);
+    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td>${detailTextCell('触发规则', row.d.rule, payload, 42)}</td><td>${detailTextCell('AI 优化建议', row.d.advice, payload, 70)}</td><td>${candidateStatusCell(row, row.d, actions)}</td></tr>`;
+  }).join('') : `<tr><td colspan="${columnCount}"><div class="empty">${esc(riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。')}</div></td></tr>`;
   toggle.innerHTML = detailListToggle(details.length, visibleCount);
 }
 
-export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {} }) {
+export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, actions = {} }) {
   renderCommerceRiskOverview(diagnostics, riskFilter);
   renderCountryTable(rows, diagnostics, Boolean(expandedLists.countries), sort.countries || 'spend');
   renderCampaignTable(rows, diagnostics, Boolean(expandedLists.campaigns), sort.campaigns || 'spend');
   renderCreativeTable(rows, diagnostics, Boolean(expandedLists.creatives), sort.creatives || 'spend');
-  renderCommerceDetailTable(rows, diagnostics, riskVisibleCount, riskFilter);
+  renderCommerceDetailTable(rows, diagnostics, riskVisibleCount, riskFilter, actions);
 }
 
-export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend' }) {
+export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend', actions = {} }) {
   const totals = commerceTotals(rows);
   const hasData = rows.length > 0;
   const kpis = [
@@ -288,7 +345,7 @@ export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {},
   renderCommerceAdvice(diagnostics, Boolean(expandedLists.advice));
   renderCommerceTrend(rows, trendMetric);
   renderFunnel('b2cFunnelCompact', totals, true);
-  renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskVisibleCount, riskFilter, sort });
+  renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskVisibleCount, riskFilter, sort, actions });
   const source = byId('b2cDataSummary');
   if (source) source.textContent = hasData ? `已读取 ${rows.length} 条 Meta 广告记录；Meta Purchases 和 Meta Attributed GMV 不等同于店铺真实订单或 Store GMV。` : 'B2C 模式使用与 B2B 相同的 Meta 数据导入、国家、Campaign 和日期筛选条件。';
 }
@@ -306,7 +363,7 @@ export function renderFunnelPage({ rows, diagnostics }) {
 export function renderCommerceRulesForm(rules, frequencyRules) {
   const fields = [
     ['targetRoas', '目标 ROAS', 0.1, 0.1], ['targetCpa', '目标 CPA', 1, 0.01], ['roasWatchRatio', '观察 ROAS 比例', 0.05, 0, 1], ['roasHighRiskRatio', '高风险 ROAS 比例', 0.05, 0, 1],
-    ['cpaWatchMultiplier', 'CPA 观察倍数', 0.1, 0], ['cpaHighRiskMultiplier', 'CPA 高风险倍数', 0.1, 0], ['noPurchaseHighSpendMultiplier', '无购买高风险花费倍数', 0.1, 0], ['noPurchaseStopSpendMultiplier', '无购买自动关停候选倍数', 0.1, 0]
+    ['cpaWatchMultiplier', 'CPA 观察倍数', 0.1, 0], ['cpaHighRiskMultiplier', 'CPA 高风险倍数', 0.1, 0], ['noPurchaseHighSpendMultiplier', '无购买高风险花费倍数', 0.1, 0], ['noPurchaseStopSpendMultiplier', '无购买关停候选倍数', 0.1, 0], ['highCpaStopMultiplier', '高 CPA 关停候选倍数', 0.1, 0], ['lowRoasStopRatio', '极低 ROAS 倍数', 0.05, 0, 1]
   ];
   const grid = byId('b2cRulesGrid');
   const commerceFields = fields.map(([key, label, step, min, max]) => `<label>${label}<input id="commerceRule-${key}" data-commerce-rule="${key}" type="number" min="${min}"${max !== undefined ? ` max="${max}"` : ''} step="${step}" value="${rules[key]}"></label>`).join('');

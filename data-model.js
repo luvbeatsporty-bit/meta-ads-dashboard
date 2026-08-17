@@ -8,7 +8,10 @@ export const DEFAULT_COMMERCE_RULES = Object.freeze({
   cpaWatchMultiplier: 1.2,
   cpaHighRiskMultiplier: 1.5,
   noPurchaseHighSpendMultiplier: 2,
-  noPurchaseStopSpendMultiplier: 3
+  noPurchaseStopSpendMultiplier: 3,
+  highCpaStopMultiplier: 2,
+  lowRoasStopRatio: 0.5,
+  minimumPurchaseSample: 3
 });
 
 export const DEFAULT_RULES = Object.freeze({

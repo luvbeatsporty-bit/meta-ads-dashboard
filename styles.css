@@ -627,3 +627,22 @@ body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
 .b2c-analysis-table { min-width: 1300px; }
 @media (max-width: 980px) { .commerce-risk-distribution { grid-template-columns: repeat(3, minmax(0, 1fr)); }.commerce-segmented { justify-content: flex-start; } }
 @media (max-width: 680px) { .commerce-risk-distribution { grid-template-columns: repeat(2, minmax(0, 1fr)); }.commerce-segmented { width: 100%; }.commerce-segmented button { flex: 1 0 auto; }.commerce-trend-svg { height: 205px; }.commerce-trend-chart { min-height: 209px; } }
+
+/* B2C diagnostic details: compact links preserve table density while exposing full copy. */
+.truncated-detail { display: flex; min-width: 150px; align-items: center; gap: 7px; }
+.truncated-detail > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commerce-detail-link { flex: 0 0 auto; }
+.commerce-detail-modal { width: min(680px, calc(100vw - 36px)); }
+.commerce-detail-copy { margin: 0; padding: 14px 15px; color: #46536b; background: #f7f9fd; border: 1px solid #e7ebf4; border-radius: 10px; line-height: 1.7; white-space: pre-wrap; }
+.commerce-detail-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0 0 14px; }
+.commerce-detail-context div { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid #edf0f5; }
+.commerce-detail-context dt { color: #8490a6; font-size: 11px; }
+.commerce-detail-context dd { margin: 0; color: #32415d; font-size: 11px; font-weight: 800; text-align: right; }
+.commerce-detail-section { margin: 0 0 14px; }
+.commerce-detail-section h3 { margin: 0 0 6px; color: #273550; font-size: 12px; }
+.commerce-candidate-status { min-width: 180px; }
+.commerce-candidate-status > span { display: block; margin-bottom: 4px; color: #a24d3e; font-size: 10px; font-weight: 800; }
+.commerce-action-links { display: flex; flex-wrap: wrap; gap: 4px; }
+.commerce-action-links .small-btn { white-space: nowrap; }
+.commerce-detail-actions { justify-content: flex-end; }
+@media (max-width: 760px) { .commerce-detail-context { grid-template-columns: 1fr; }.commerce-detail-modal { padding: 18px; }.commerce-action-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } }

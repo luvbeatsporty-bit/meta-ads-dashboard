@@ -373,7 +373,8 @@ function renderDashboard() {
       riskFilter: state.commerceRiskFilter,
       sort: state.commerceSort,
       trendMetric: state.commerceTrendMetric,
-      actions: state.commerceActions
+      actions: state.commerceActions,
+      rules: commerceRules()
     });
     syncCommerceSortControls();
     renderFunnelPage({ rows, diagnostics: items });
@@ -443,7 +444,7 @@ function renderCommerceAnalysisOnly() {
 }
 
 function renderCommerceAdviceOnly() {
-  renderCommerceAdvice(commerceItems(), Boolean(state.commerceExpanded.advice));
+  renderCommerceAdvice(commerceItems(), Boolean(state.commerceExpanded.advice), commerceRules());
 }
 
 function renderChartToggleButtons() {
@@ -540,11 +541,20 @@ function renderCommerceDetailModal(detail) {
   const currentAction = detail.actionId ? state.commerceActions[detail.actionId] : '';
   $('commerceDetailEyebrow').textContent = detail.eyebrow || 'B2C DIAGNOSTIC DETAIL';
   $('commerceDetailTitle').textContent = detail.title || '诊断详情';
+  const tags = Array.isArray(detail.diagnosisTags) ? detail.diagnosisTags.filter(Boolean) : [];
+  const affectedObjects = Array.isArray(detail.affectedObjects) ? detail.affectedObjects : [];
+  const formatCommerceNumber = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US') : '—';
+  const formatCommerceMoney = value => Number.isFinite(Number(value)) ? `$${Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—';
+  const formatCommerceRoas = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}×` : '—';
+  const formatCommerceCpa = value => Number.isFinite(Number(value)) ? formatCommerceMoney(value) : '—';
   $('commerceDetailContent').innerHTML = `
     ${context.length ? `<dl class="commerce-detail-context">${context.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>` : ''}
+    ${detail.primaryDiagnosis ? `<section class="commerce-detail-section"><h3>Primary Diagnosis</h3><p class="commerce-detail-copy">${esc(detail.primaryDiagnosis)}</p></section>` : ''}
+    ${tags.length ? `<section class="commerce-detail-section"><h3>辅助诊断</h3><p class="commerce-detail-copy">${esc(tags.join(' · '))}</p></section>` : ''}
     <section class="commerce-detail-section"><h3>触发规则 / 风险原因</h3><p class="commerce-detail-copy">${esc(detail.rule || '—')}</p></section>
-    <section class="commerce-detail-section"><h3>AI 优化建议</h3><p class="commerce-detail-copy">${esc(detail.recommendation || detail.text || '—')}</p></section>
+    <section class="commerce-detail-section"><h3>完整 AI 优化建议</h3><p class="commerce-detail-copy">${esc(detail.fullRecommendation || detail.recommendation || detail.text || '—')}</p></section>
     <section class="commerce-detail-section"><h3>建议操作</h3><p class="commerce-detail-copy">${esc(detail.recommendedAction || '继续观察')}</p></section>
+    ${affectedObjects.length ? `<section class="commerce-detail-section"><h3>受影响对象（${affectedObjects.length} 个）</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Country</th><th>Campaign</th><th>Ad</th><th>Spend</th><th>Purchases</th><th>CPA</th><th>ROAS</th><th>Trigger Rule</th></tr></thead><tbody>${affectedObjects.map(item => `<tr><td>${esc(item.country || '—')}</td><td>${esc(item.campaign || '—')}</td><td>${esc(item.ad || '—')}</td><td>${formatCommerceMoney(item.spend)}</td><td>${formatCommerceNumber(item.purchases)}</td><td>${formatCommerceCpa(item.cpa)}</td><td>${formatCommerceRoas(item.roas)}</td><td>${esc(item.rule || '—')}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
   `;
   $('commerceDetailActions').dataset.commerceDetailId = detail.id || '';
   $('commerceDetailActions').innerHTML = detail.stopCandidate && detail.actionId ? `
@@ -1225,6 +1235,10 @@ function init() {
   dateRange();
   renderDashboard();
   bindEvents();
+  // Restore the persisted business mode's view on a fresh load. Without this,
+  // a saved B2C mode could render B2C data into hidden hosts while the B2B
+  // dashboard view remained active on screen.
+  switchView(state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard');
 
   // 导入按钮必须立即可用；本机历史数据在后台恢复，避免本地存储异常时阻塞文件选择。
   loadDashboardData().then(saved => {

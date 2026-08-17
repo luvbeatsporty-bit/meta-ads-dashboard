@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { extractMetaConversions } from '../commerce-mapping.js';
 import { commerceDimensionGroups, commerceTotals, commerceTrend, safeDivide } from '../commerce-metrics.js';
-import { diagnoseCommerceGroup, commerceDiagnostics } from '../commerce-diagnosis.js';
+import { buildCommerceAdviceClusters, buildLayeredRecommendation, commerceDiagnostics, derivePrimaryDiagnosis, deriveSuggestedAction, diagnoseCommerceGroup } from '../commerce-diagnosis.js';
 import { DEFAULT_COMMERCE_RULES } from '../data-model.js';
 
 const rules = {
@@ -154,10 +154,44 @@ assert.equal(cpaFatigue.category, 'creativeFatigue', 'high frequency plus a CPA 
 const roasFatigue = diagnoseCommerceGroup({ ...frequencyHighGroup, rows: trendRows({ roasMultiplier: 0.7 }) }, rules);
 assert.equal(roasFatigue.category, 'creativeFatigue', 'high frequency plus a ROAS decline must flag creative fatigue');
 
-console.log('commerce tests passed');
+const stopPrimary = derivePrimaryDiagnosis({ stopCandidate: true, signals: [{ category: 'roas', level: 'high' }, { category: 'frequency', level: 'high' }] });
+assert.equal(stopPrimary.key, 'stopCandidate', 'a manual stop candidate must always be the primary diagnosis');
+const noPurchasePrimary = derivePrimaryDiagnosis({ signals: [{ category: 'noPurchase', level: 'high' }, { category: 'roas', level: 'high' }] });
+assert.equal(noPurchasePrimary.key, 'noPurchase', 'no-purchase high spend must outrank an ordinary low-ROAS diagnosis');
+const roasPrimary = derivePrimaryDiagnosis({ signals: [{ category: 'roas', level: 'high' }, { category: 'frequency', level: 'high' }] });
+assert.equal(roasPrimary.key, 'roasSevere', 'severe ROAS loss must outrank a frequency reminder');
+assert.equal(deriveSuggestedAction({ primaryDiagnosis: { key: 'roasSevere' } }, 'country'), '建议调整 Campaign 预算', 'country actions must focus on country-level allocation');
+assert.equal(deriveSuggestedAction({ primaryDiagnosis: { key: 'roasSevere' } }, 'campaign'), '建议检查 Ad Set', 'campaign actions must focus on internal Ad Set efficiency');
+assert.equal(deriveSuggestedAction({ primaryDiagnosis: { key: 'creativeFatigue' } }, 'creative'), '建议更换素材', 'creative actions must focus on refreshing creative');
+assert.match(buildLayeredRecommendation({ diagnosis: { primaryDiagnosis: { key: 'checkoutCompletion', label: 'Checkout Completion 异常' } }, scope: 'funnel' }).fullRecommendation, /支付/, 'funnel recommendations must provide funnel-specific diagnosis copy');
+
+const clusterDiagnosis = (key, label, level, extra = {}) => ({
+  level, label: level === 'extreme' ? '极高风险 · 关停候选' : level === 'high' ? '高风险' : level === 'watch' ? '观察' : '优秀',
+  category: extra.category || (key === 'stopCandidate' ? 'noPurchase' : key === 'roasSevere' ? 'roas' : key === 'cpaSevere' ? 'cpa' : key),
+  categories: extra.categories || [extra.category || key],
+  rule: extra.rule || `${label} 测试规则`,
+  advice: extra.advice || `${label} 完整建议`,
+  stopCandidate: Boolean(extra.stopCandidate),
+  primaryDiagnosis: { key, label }
+});
+const clusteredDiagnostics = [
+  { campaign: 'Stop Campaign', country: 'US', ad: 'Stop Ad', spend: 30, purchases: 0, metaAttributedGmv: 0, cpa: null, roas: 0, d: clusterDiagnosis('stopCandidate', '关停候选', 'extreme', { stopCandidate: true }) },
+  { campaign: 'Low ROAS A', country: 'US', ad: 'Low ROAS Ad A', spend: 120, purchases: 2, metaAttributedGmv: 60, cpa: 60, roas: .5, d: clusterDiagnosis('roasSevere', 'ROAS 严重偏低', 'high') },
+  { campaign: 'Low ROAS B', country: 'CA', ad: 'Low ROAS Ad B', spend: 80, purchases: 1, metaAttributedGmv: 40, cpa: 80, roas: .5, d: clusterDiagnosis('roasSevere', 'ROAS 严重偏低', 'high') },
+  { campaign: 'Checkout Campaign', country: 'UK', ad: 'Checkout Ad', spend: 50, purchases: 1, metaAttributedGmv: 70, cpa: 50, roas: 1.4, d: clusterDiagnosis('checkoutCompletion', 'Checkout Completion 异常', 'high', { category: 'checkout' }) }
+];
+const clustered = buildCommerceAdviceClusters(clusteredDiagnostics, rules);
+assert.equal(clustered[0].primaryDiagnosis.key, 'stopCandidate', 'stop candidates must sort before every other problem cluster');
+const roasCluster = clustered.find(item => item.primaryDiagnosis.key === 'roasSevere');
+assert.equal(roasCluster.affectedAds, 2, 'same primary diagnosis rows must de-duplicate into one cluster');
+assert.equal(roasCluster.affectedSpend, 200, 'affected spend must add all rows in the same diagnosis cluster');
+assert.equal(roasCluster.affectedCampaigns, 2, 'clusters must preserve affected campaign counts');
+assert.equal(roasCluster.affectedObjects[0].ad, 'Low ROAS Ad A', 'cluster detail payload must retain the affected Ad');
+assert.match(roasCluster.fullRecommendation, /高花费低回报/, 'cluster retains a full recommendation for the detail modal');
+
 
 const listItems = Array.from({ length: 10 }, (_, index) => ({ id: index + 1 }));
-const { hasMoreListItems, renderCommerceAdvice, renderCommerceAnalysisModules, visibleDetailItems, visibleListItems } = await import('../commerce-ui.js');
+const { getCommerceDetail, hasMoreListItems, renderCommerceAdvice, renderCommerceAnalysisModules, visibleDetailItems, visibleListItems } = await import('../commerce-ui.js');
 assert.equal(visibleListItems(listItems, false).length, 5, 'collapsed commerce lists must use the default limit');
 assert.equal(visibleListItems(listItems, true).length, 10, 'expanded commerce lists must expose all available records');
 assert.equal(visibleDetailItems(listItems, 5).length, 5, 'collapsed commerce detail tables must use the default limit');
@@ -287,11 +321,36 @@ renderCommerceAnalysisModules({
 assert.equal((analysisHosts.get('b2cRiskTable').innerHTML.match(/<tr>/g) || []).length, 60, 'detail tbody must render every data row only after explicit continued loading');
 assert.match(analysisHosts.get('b2cRiskTableToggle').innerHTML, /收起，仅显示前 5 条/, 'fully loaded detail table must expose a collapse action');
 
-renderCommerceAdvice(renderDiagnostics, false);
-assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 5, 'collapsed advice list must render five cards');
-assert.match(analysisHosts.get('b2cAdviceToggle').innerHTML, /查看全部建议/, 'advice list must expose an expansion toggle when more than five cards exist');
-renderCommerceAdvice(renderDiagnostics, true);
-assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 10, 'expanded advice list must render all cards');
+assert.match(analysisHosts.get('b2cCountryTable').innerHTML, /Diagnosis/, 'country tables must use compact diagnosis columns');
+assert.match(analysisHosts.get('b2cCountryTable').innerHTML, /Suggested Action/, 'country tables must use a short suggested-action column');
+assert.match(analysisHosts.get('b2cCountryTable').innerHTML, /Details/, 'country tables must use a reusable detail link');
+assert.doesNotMatch(analysisHosts.get('b2cCountryTable').innerHTML, /AI Recommendation/, 'country tables must not render the old long recommendation header');
+assert.doesNotMatch(analysisHosts.get('b2cCountryTable').innerHTML, /测试建议 1/, 'country tables must not repeat long row-level AI copy');
+
+renderCommerceAdvice(renderDiagnostics, false, rules);
+assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 1, 'identical row-level issues must collapse into one AI problem cluster');
+assert.equal(analysisHosts.get('b2cAdviceToggle').innerHTML, '', 'a single issue cluster must not show an unnecessary expansion toggle');
+
+const adviceClusterDiagnostics = [
+  ...clusteredDiagnostics,
+  { campaign: 'CPA Campaign', country: 'DE', ad: 'CPA Ad', spend: 90, purchases: 1, metaAttributedGmv: 45, cpa: 90, roas: .5, d: clusterDiagnosis('cpaSevere', 'CPA 严重偏高', 'high') },
+  { campaign: 'Product Campaign', country: 'FR', ad: 'Product Ad', spend: 80, purchases: 1, metaAttributedGmv: 90, cpa: 80, roas: 1.125, d: clusterDiagnosis('productPage', 'ATC / 商品页问题', 'high', { category: 'productPage' }) },
+  { campaign: 'Landing Campaign', country: 'AU', ad: 'Landing Ad', spend: 70, purchases: 1, metaAttributedGmv: 100, cpa: 70, roas: 1.43, d: clusterDiagnosis('landingPage', 'LPV / Landing Page 问题', 'watch', { category: 'landingPage' }) },
+  { campaign: 'Creative Campaign', country: 'JP', ad: 'Creative Ad', spend: 60, purchases: 2, metaAttributedGmv: 220, cpa: 30, roas: 3.67, d: clusterDiagnosis('creativeFatigue', '素材疲劳', 'watch', { category: 'creativeFatigue' }) },
+  { campaign: 'Excellent Campaign', country: 'SG', ad: 'Excellent Ad', spend: 55, purchases: 4, metaAttributedGmv: 220, cpa: 13.75, roas: 4, d: clusterDiagnosis('excellent', '表现优秀，可扩量', 'excellent', { category: 'roas' }) }
+];
+renderCommerceAdvice(adviceClusterDiagnostics, false, rules);
+assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 5, 'collapsed advice must show at most five issue clusters');
+assert.match(analysisHosts.get('b2cAdviceToggle').innerHTML, /查看全部问题/, 'more than five issue clusters must expose a compact expansion toggle');
+assert.ok(analysisHosts.get('b2cAdviceList').innerHTML.indexOf('关停候选') < analysisHosts.get('b2cAdviceList').innerHTML.indexOf('ROAS 严重偏低'), 'stop candidate cluster must be pinned before ordinary high-risk clusters');
+const detailId = analysisHosts.get('b2cAdviceList').innerHTML.match(/data-commerce-detail-id="([^"]+)"/)?.[1];
+const clusterDetail = getCommerceDetail(detailId);
+assert.equal(clusterDetail.primaryDiagnosis, '关停候选', 'AI cluster details must retain the primary diagnosis');
+assert.ok(clusterDetail.affectedObjects.length > 0, 'AI cluster details must retain affected objects for the shared modal');
+assert.match(clusterDetail.fullRecommendation, /人工决定暂停/, 'AI cluster details must retain the complete recommendation');
+renderCommerceAdvice(adviceClusterDiagnostics, true, rules);
+assert.equal((analysisHosts.get('b2cAdviceList').innerHTML.match(/class="advice-card/g) || []).length, 8, 'expanded advice must reveal every issue cluster');
 assert.match(analysisHosts.get('b2cAdviceToggle').innerHTML, /收起/, 'expanded advice toggle must switch its label to collapse');
 
 globalThis.document = originalDocument;
+console.log('commerce tests passed');

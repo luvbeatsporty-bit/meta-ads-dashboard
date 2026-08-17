@@ -1,5 +1,6 @@
 import { commerceDimensionGroups, commerceTotals, commerceTrend, funnelStages } from './commerce-metrics.js';
 import { esc, integer, money, pct, titleText } from './metrics.js';
+import { buildCommerceAdviceClusters, buildLayeredRecommendation, derivePrimaryDiagnosis, deriveSuggestedAction } from './commerce-diagnosis.js';
 
 const DISPLAY_LIMIT = 5;
 const RISK_ORDER = { extreme: 0, high: 1, watch: 2, normal: 3, excellent: 4 };
@@ -29,6 +30,11 @@ function detailTextCell(title, text, payload = {}, limit = 70) {
   return `<div class="truncated-detail"><span title="${esc(fullText)}">${esc(titleText(fullText, limit))}</span><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${id}">查看全文</button></div>`;
 }
 
+function detailButton(payload, label = '查看详情') {
+  const id = registerCommerceDetail(payload);
+  return `<button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${id}">${esc(label)}</button>`;
+}
+
 function commerceActionId(row) {
   return `b2c:${row.campaign || '未命名 Campaign'}|${row.country || '未分类'}`;
 }
@@ -36,17 +42,23 @@ function commerceActionId(row) {
 function detailPayloadForRow(row, diagnosis) {
   const cpa = row.purchases ? Number(row.spend || 0) / Number(row.purchases) : null;
   const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
+  const primaryDiagnosis = diagnosis.primaryDiagnosis || derivePrimaryDiagnosis(diagnosis);
+  const layered = buildLayeredRecommendation({ diagnosis: { ...diagnosis, primaryDiagnosis }, scope: 'ad', name: row.ad || row.creative || row.campaign, metrics: row });
   return {
     title: diagnosis.stopCandidate ? '关停候选诊断详情' : 'B2C 诊断详情',
     eyebrow: diagnosis.stopCandidate ? 'EXTREME RISK · MANUAL REVIEW' : 'B2C DIAGNOSTIC DETAIL',
     text: diagnosis.advice || '—',
     rule: diagnosis.rule || '—',
-    recommendation: diagnosis.advice || '—',
-    recommendedAction: diagnosis.recommendedAction || '继续观察',
+    recommendation: diagnosis.advice || layered.fullRecommendation || '—',
+    fullRecommendation: layered.fullRecommendation,
+    primaryDiagnosis: primaryDiagnosis.label,
+    diagnosisTags: diagnosis.categories || [],
+    recommendedAction: layered.recommendedAction || diagnosis.recommendedAction || '建议继续观察',
     stopCandidate: Boolean(diagnosis.stopCandidate),
     actionId: commerceActionId(row),
     context: [
-      ['Campaign', row.campaign || '—'], ['Country', row.country || '—'], ['风险状态', diagnosis.label || levelMeta(diagnosis.level)[0]],
+      ['分析层级', 'Ad / Risk Detail'], ['Ad', row.ad || row.creative || '—'], ['Campaign', row.campaign || '—'], ['Country', row.country || '—'],
+      ['Primary Diagnosis', primaryDiagnosis.label], ['风险状态', diagnosis.label || levelMeta(diagnosis.level)[0]],
       ['Spend', money(row.spend)], ['Purchases', integer(row.purchases)], ['CPA', money(cpa)], ['ROAS', roas === null ? '—' : `${fixed(roas)}×`],
       ['Frequency', row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—']
     ]
@@ -178,64 +190,47 @@ export function renderFunnel(targetId, totals, compact = false) {
   host.classList.toggle('compact', compact);
 }
 
-function adviceMeta(category) {
-  return {
-    creative: ['素材吸引力不足', '当前 CTR 偏低，问题最可能发生在广告素材吸引力层。'],
-    creativeFatigue: ['Creative Fatigue / 素材疲劳', '频次和效率变化显示素材可能已疲劳。'],
-    audienceSaturation: ['受众趋于饱和', '展示增加但新增覆盖放缓，受众可能趋于饱和。'],
-    landingPage: ['Landing Page 问题', '广告点击后未充分到达落地页，优先检查加载和跳转。'],
-    productPage: ['商品页转化问题', '已进入商品页但加购率偏低，优先检查商品信息、价格和信任感。'],
-    cart: ['加购后流失', '加购后进入结账比例偏低，优先检查购物车、运费和优惠。'],
-    checkout: ['支付完成率异常', '进入结账后购买完成率偏低，优先检查支付、税费、运费和结账体验。'],
-    cpa: ['CPA 过高', '购买成本超过目标，需要检查漏斗和素材效率。'],
-    roas: ['ROAS 过低', '广告回报低于目标，应从购买成本和转化漏斗定位问题。'],
-    noPurchase: ['无购买高花费', '花费已经达到无购买风险阈值，需要优先人工排查。'],
-    normal: ['继续观察', '购买样本仍在累积，暂不建议仓促修改。']
-  }[category] || ['电商广告建议', '系统根据当前商业结果和漏斗信号生成建议。'];
+function commerceAdviceItems(diagnostics, rules = {}) {
+  return buildCommerceAdviceClusters(diagnostics, rules).map(cluster => ({ ...cluster, meta: `${cluster.affectedAds} 个广告组合 · ${cluster.affectedCampaigns} 个 Campaign`, text: cluster.summary }));
 }
 
-function commerceAdviceItems(diagnostics) {
-  const cards = diagnostics.flatMap(item => {
-    const categories = item.d.categories?.filter(category => category !== 'normal') || [];
-    const candidates = categories.length ? categories : [item.d.category || 'normal'];
-    return candidates.map(category => {
-      const [title, hint] = adviceMeta(category);
-      return { level: item.d.level, category, title, meta: `${item.campaign} · ${item.country} · ${item.d.rule}`, text: `${hint} ${item.d.advice}` };
-    });
-  });
-  const unique = new Map();
-  cards.forEach(card => {
-    const key = `${card.category}|${card.meta}`;
-    if (!unique.has(key)) unique.set(key, card);
-  });
-  const items = [...unique.values()].sort((one, two) => RISK_ORDER[one.level] - RISK_ORDER[two.level]);
-  if (items.length) return items;
-  return diagnostics.length ? [{ level: 'excellent', category: 'excellent', title: '表现优秀，可考虑扩量', meta: '当前筛选范围内 ROAS、CPA 与购买表现健康', text: '可按 10%–20% 的节奏小步扩量，同时继续观察频次、购买成本和转化率。' }] : [];
-}
-
-export function renderCommerceAdvice(diagnostics, expanded = false) {
+export function renderCommerceAdvice(diagnostics, expanded = false, rules = {}) {
   const host = byId('b2cAdviceList');
   const toggle = byId('b2cAdviceToggle');
-  const items = commerceAdviceItems(diagnostics);
+  const items = commerceAdviceItems(diagnostics, rules);
   if (!host || !toggle) return;
   if (!items.length) {
-    host.innerHTML = '<div class="empty">导入包含 Purchase、GMV 与漏斗字段的 Meta 报表后，系统会在这里给出电商优化建议。</div>';
+    host.innerHTML = diagnostics.length
+      ? '<div class="empty">当前没有需要优先处理的 B2C AI 建议。继续观察 ROAS、CPA、购买和转化漏斗表现。</div>'
+      : '<div class="empty">导入包含 Purchase、GMV 与漏斗字段的 Meta 报表后，系统会在这里给出电商优化建议。</div>';
     toggle.innerHTML = '';
     return;
   }
   host.innerHTML = visibleListItems(items, expanded).map(item => {
-    const detailId = registerCommerceDetail({ title: 'AI 优化建议', eyebrow: 'B2C AI RECOMMENDATION', text: item.text, rule: item.meta, recommendation: item.text, context: [['风险级别', levelMeta(item.level)[0]], ['建议类型', item.title]] });
-    return `<article class="advice-card ${riskClass(item.level)}"><span class="advice-icon">${item.level === 'excellent' ? '↗' : item.level === 'watch' ? '◷' : '!'}</span><span class="advice-copy"><span class="advice-label">${esc(item.title)}</span><h3>${esc(levelMeta(item.level)[0])} · ${esc(item.title)}</h3><small>${esc(item.meta)}</small><p>${esc(titleText(item.text, 150))}</p><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${detailId}">查看完整建议</button></span></article>`;
+    const averageRoas = item.averageRoas === null ? '—' : `${Number(item.averageRoas).toFixed(2)}×`;
+    const context = [
+      ['分析层级', '问题聚类'], ['Primary Diagnosis', item.primaryDiagnosis.label], ['风险级别', levelMeta(item.level)[0]],
+      ['影响广告组合', `${item.affectedAds} 个`], ['影响 Campaign', `${item.affectedCampaigns} 个`], ['Affected Spend', money(item.affectedSpend)],
+      ['主要国家', item.primaryCountries.join(' / ') || '—'], ['平均 ROAS', averageRoas], ['Target ROAS', item.targetRoas === null ? '—' : `${item.targetRoas.toFixed(2)}×`]
+    ];
+    const detailId = registerCommerceDetail({
+      title: `${item.title} · 受影响对象`, eyebrow: 'B2C AI RECOMMENDATION CLUSTER', text: item.summary,
+      rule: [...item.rules].join('；') || item.title, recommendation: item.fullRecommendation, fullRecommendation: item.fullRecommendation,
+      primaryDiagnosis: item.primaryDiagnosis.label, diagnosisTags: [...item.tags], recommendedAction: item.recommendedAction,
+      affectedObjects: item.affectedObjects, context, stopCandidate: item.primaryDiagnosis.key === 'stopCandidate'
+    });
+    const icon = item.level === 'excellent' ? '↗' : item.level === 'watch' ? '◷' : '!';
+    return `<article class="advice-card ${riskClass(item.level)}"><span class="advice-icon">${icon}</span><span class="advice-copy"><span class="advice-label">${esc(item.title)}</span><h3>${esc(levelMeta(item.level)[0])} · ${esc(item.title)}</h3><small>${esc(item.meta)} · 涉及花费 ${esc(money(item.affectedSpend))}</small><p>${esc(titleText(item.summary, 180))}</p><div class="advice-cluster-stats"><span>主要国家 ${esc(item.primaryCountries.join(' / ') || '—')}</span><span>平均 ROAS ${esc(averageRoas)}</span><span>动作 ${esc(item.recommendedAction)}</span></div><button type="button" class="text-button commerce-detail-link" data-commerce-detail-id="${detailId}">查看详情</button></span></article>`;
   }).join('');
-  toggle.innerHTML = listToggle('advice', items.length, expanded, { noun: '条建议', expandLabel: '查看全部建议' });
+  toggle.innerHTML = listToggle('advice', items.length, expanded, { noun: '类问题', expandLabel: '查看全部问题' });
 }
 
 function diagnosisForGroup(group, diagnosisMap) {
   const related = [...new Set(group.rows.map(row => `${row.campaign}|${row.country}`))]
     .map(id => diagnosisMap.get(id))
     .filter(Boolean)
-    .sort((one, two) => RISK_ORDER[one.level] - RISK_ORDER[two.level]);
-  return related[0] || { level: 'normal', label: '正常', rule: '等待更多购买样本', advice: '当前组合尚未形成可诊断的购买样本。' };
+    .sort((one, two) => RISK_ORDER[one.level] - RISK_ORDER[two.level] || Number(two.spend || 0) - Number(one.spend || 0));
+  return related[0] || { level: 'normal', label: '正常', rule: '等待更多购买样本', advice: '当前组合尚未形成可诊断的购买样本。', primaryDiagnosis: { key: 'normal', label: '继续观察' }, categories: [] };
 }
 
 function sortGroups(groups, key = 'spend') {
@@ -252,6 +247,39 @@ function groupRows(rows, diagnostics, dimension, sortKey) {
   return sortGroups(commerceDimensionGroups(rows, dimension).map(group => ({ ...group, d: diagnosisForGroup(group, diagnosisMap) })), sortKey);
 }
 
+function layeredGroup(group, scope) {
+  const primaryDiagnosis = group.d.primaryDiagnosis || derivePrimaryDiagnosis(group.d);
+  const layered = buildLayeredRecommendation({ diagnosis: { ...group.d, primaryDiagnosis }, scope, name: group.name, metrics: group });
+  return { ...group.d, primaryDiagnosis, ...layered };
+}
+
+function groupDetailPayload(group, scope) {
+  const diagnosis = layeredGroup(group, scope);
+  return {
+    title: `${group.name} · ${scope === 'country' ? '国家' : scope === 'campaign' ? 'Campaign' : 'Creative'} 诊断详情`,
+    eyebrow: `B2C ${scope.toUpperCase()} DIAGNOSTIC`, text: diagnosis.advice || '—', rule: diagnosis.rule || '—',
+    recommendation: diagnosis.advice || diagnosis.fullRecommendation || '—', fullRecommendation: diagnosis.fullRecommendation,
+    primaryDiagnosis: diagnosis.primaryDiagnosis.label, diagnosisTags: diagnosis.categories || [], recommendedAction: diagnosis.recommendedAction,
+    context: [
+      ['分析层级', scope === 'country' ? 'Country' : scope === 'campaign' ? 'Campaign' : 'Creative'], ['对象', group.name],
+      ['Primary Diagnosis', diagnosis.primaryDiagnosis.label], ['风险状态', diagnosis.label || levelMeta(diagnosis.level)[0]],
+      ['Spend', money(group.spend)], ['Purchases', integer(group.purchases)], ['CPA', money(group.cpa)], ['ROAS', group.roas === null ? '—' : `${fixed(group.roas)}×`],
+      ['Frequency', group.frequency === null ? '—' : `${fixed(group.frequency)} 次`]
+    ],
+    affectedObjects: group.rows.map(row => ({ country: row.country || '—', campaign: row.campaign || '—', ad: row.ad || row.creative || '—', spend: Number(row.spend || 0), purchases: Number(row.purchases || 0), cpa: row.purchases ? Number(row.spend || 0) / Number(row.purchases) : null, roas: row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null, rule: diagnosis.rule || '—', diagnosis: diagnosis.primaryDiagnosis.label }))
+  };
+}
+
+function compactDiagnosisCell(diagnosis) {
+  const primary = diagnosis.primaryDiagnosis || derivePrimaryDiagnosis(diagnosis);
+  return `<span class="commerce-primary-diagnosis" title="${esc(primary.label)}">${esc(primary.label)}</span>`;
+}
+
+function compactActionCell(diagnosis, scope) {
+  const action = diagnosis.recommendedAction || deriveSuggestedAction(diagnosis, scope);
+  return `<span class="commerce-suggested-action">${esc(action)}</span>`;
+}
+
 function setTable(hostId, headers, rows, rowHtml, emptyText, toggleId, toggleKey, expanded, noun) {
   const table = byId(hostId);
   const toggle = byId(toggleId);
@@ -264,17 +292,17 @@ function setTable(hostId, headers, rows, rowHtml, emptyText, toggleId, toggleKey
 
 function renderCountryTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'country', sortKey);
-  setTable('b2cCountryTable', ['Country', 'Spend', 'Purchases', 'Meta GMV', 'ROAS', 'CPA', 'AOV', 'CTR', 'CPC', 'Frequency', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td>${esc(group.name)}</td><td>${money(group.spend)}</td><td>${integer(group.purchases)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${money(group.cpa)}</td><td>${money(group.aov)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'COUNTRY DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Country', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有国家 / 地区数据。', 'b2cCountryToggle', 'countries', expanded, '个国家');
+  setTable('b2cCountryTable', ['Country', 'Spend', 'Purchases', 'Meta GMV', 'ROAS', 'CPA', 'AOV', 'CTR', 'CPC', 'Frequency', 'Risk Level', 'Diagnosis', 'Suggested Action', 'Details'], groups, group => { const diagnosis = layeredGroup(group, 'country'); return `<tr><td>${esc(group.name)}</td><td>${money(group.spend)}</td><td>${integer(group.purchases)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${money(group.cpa)}</td><td>${money(group.aov)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${riskBadge(diagnosis)}</td><td>${compactDiagnosisCell(diagnosis)}</td><td>${compactActionCell(diagnosis, 'country')}</td><td>${detailButton(groupDetailPayload(group, 'country'))}</td></tr>`; }, '当前筛选条件下没有国家 / 地区数据。', 'b2cCountryToggle', 'countries', expanded, '个国家');
 }
 
 function renderCampaignTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'campaign', sortKey);
-  setTable('b2cCampaignTable', ['Campaign', 'Countries', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'LPV', 'ATC', 'Checkout', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.countries.join(', '))}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${integer(group.linkClicks)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.landingPageViews)}</td><td>${integer(group.addToCart)}</td><td>${integer(group.initiateCheckout)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'CAMPAIGN DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Campaign', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有 Campaign 数据。', 'b2cCampaignToggle', 'campaigns', expanded, '个 Campaign');
+  setTable('b2cCampaignTable', ['Campaign', 'Countries', 'Spend', 'Impressions', 'Reach', 'Frequency', 'Link Clicks', 'CTR', 'CPC', 'LPV', 'ATC', 'Checkout', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'Diagnosis', 'Suggested Action', 'Details'], groups, group => { const diagnosis = layeredGroup(group, 'campaign'); return `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.countries.join(', '))}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${integer(group.linkClicks)}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.landingPageViews)}</td><td>${integer(group.addToCart)}</td><td>${integer(group.initiateCheckout)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(diagnosis)}</td><td>${compactDiagnosisCell(diagnosis)}</td><td>${compactActionCell(diagnosis, 'campaign')}</td><td>${detailButton(groupDetailPayload(group, 'campaign'))}</td></tr>`; }, '当前筛选条件下没有 Campaign 数据。', 'b2cCampaignToggle', 'campaigns', expanded, '个 Campaign');
 }
 
 function renderCreativeTable(rows, diagnostics, expanded, sortKey) {
   const groups = groupRows(rows, diagnostics, 'creative', sortKey);
-  setTable('b2cCreativeTable', ['Creative / Ad', 'Creative Type', 'Spend', 'Impressions', 'Reach', 'Frequency', 'CTR', 'CPC', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'AI Recommendation'], groups, group => `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.creativeTypes.join(', ') || '—')}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(group.d)}</td><td>${detailTextCell('AI 优化建议', group.d.advice, { eyebrow: 'CREATIVE DIAGNOSTIC', rule: group.d.rule, recommendation: group.d.advice, context: [['Creative', group.name], ['风险状态', group.d.label || levelMeta(group.d.level)[0]]] })}</td></tr>`, '当前筛选条件下没有素材数据。', 'b2cCreativeToggle', 'creatives', expanded, '个素材');
+  setTable('b2cCreativeTable', ['Creative / Ad', 'Creative Type', 'Spend', 'Impressions', 'Reach', 'Frequency', 'CTR', 'CPC', 'Purchases', 'CPA', 'Meta GMV', 'ROAS', 'Risk Level', 'Diagnosis', 'Suggested Action', 'Details'], groups, group => { const diagnosis = layeredGroup(group, 'creative'); return `<tr><td><span class="name" title="${esc(group.name)}">${esc(titleText(group.name, 30))}</span></td><td>${esc(group.creativeTypes.join(', ') || '—')}</td><td>${money(group.spend)}</td><td>${integer(group.impressions)}</td><td>${integer(group.reach)}</td><td>${group.frequency === null ? '—' : `${fixed(group.frequency)} 次`}</td><td>${rate(group.ctr)}</td><td>${money(group.cpc)}</td><td>${integer(group.purchases)}</td><td>${money(group.cpa)}</td><td>${money(group.metaAttributedGmv)}</td><td>${fixed(group.roas)}</td><td>${riskBadge(diagnosis)}</td><td>${compactDiagnosisCell(diagnosis)}</td><td>${compactActionCell(diagnosis, 'creative')}</td><td>${detailButton(groupDetailPayload(group, 'creative'))}</td></tr>`; }, '当前筛选条件下没有素材数据。', 'b2cCreativeToggle', 'creatives', expanded, '个素材');
 }
 
 function renderCommerceRiskOverview(diagnostics, selectedFilter) {
@@ -297,7 +325,7 @@ function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter, 
   const toggle = byId('b2cRiskTableToggle');
   if (!table || !toggle) return;
   const visible = visibleDetailItems(details, visibleCount);
-  const columnCount = 33;
+  const columnCount = 34;
   // #b2cRiskTable is the tbody. The one static thead in index.html is intentional.
   table.innerHTML = details.length ? visible.map(row => {
     const frequency = row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—';
@@ -310,7 +338,9 @@ function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter, 
     const aov = row.purchases ? Number(row.metaAttributedGmv || 0) / Number(row.purchases) : null;
     const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
     const payload = detailPayloadForRow(row, row.d);
-    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td>${detailTextCell('触发规则', row.d.rule, payload, 42)}</td><td>${detailTextCell('AI 优化建议', row.d.advice, payload, 70)}</td><td>${candidateStatusCell(row, row.d, actions)}</td></tr>`;
+    const layered = buildLayeredRecommendation({ diagnosis: row.d, scope: 'ad', name: row.ad || row.creative || row.campaign, metrics: row });
+    const primary = row.d.primaryDiagnosis || derivePrimaryDiagnosis(row.d);
+    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td>${esc(primary.label)}</td><td>${esc(layered.recommendedAction)}</td><td>${detailButton(payload)}</td><td>${candidateStatusCell(row, row.d, actions)}</td></tr>`;
   }).join('') : `<tr><td colspan="${columnCount}"><div class="empty">${esc(riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。')}</div></td></tr>`;
   toggle.innerHTML = detailListToggle(details.length, visibleCount);
 }
@@ -323,7 +353,7 @@ export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists
   renderCommerceDetailTable(rows, diagnostics, riskVisibleCount, riskFilter, actions);
 }
 
-export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend', actions = {} }) {
+export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend', actions = {}, rules = {} }) {
   const totals = commerceTotals(rows);
   const hasData = rows.length > 0;
   const kpis = [
@@ -342,7 +372,7 @@ export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {},
   ];
   byId('b2cMetrics').innerHTML = kpis.join('');
   byId('b2cAdviceMeta').textContent = `当前分析 ${diagnostics.length} 个 Campaign / 国家组合`;
-  renderCommerceAdvice(diagnostics, Boolean(expandedLists.advice));
+  renderCommerceAdvice(diagnostics, Boolean(expandedLists.advice), rules);
   renderCommerceTrend(rows, trendMetric);
   renderFunnel('b2cFunnelCompact', totals, true);
   renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskVisibleCount, riskFilter, sort, actions });

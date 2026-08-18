@@ -653,6 +653,11 @@ body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
 .ad-import-mapping-summary { margin: 12px 0; color: #44536d; font-size: 12px; font-weight: 700; }
 .ad-import-mapping-section { margin-top: 16px; }
 .ad-import-mapping-section h3 { margin: 0 0 8px; color: #36435e; font-size: 13px; }
+.ad-import-mapping-details summary { cursor: pointer; color: #36435e; font-size: 13px; font-weight: 800; list-style: none; }
+.ad-import-mapping-details summary::-webkit-details-marker { display: none; }
+.ad-import-mapping-details summary::after { content: "查看"; float: right; color: #71809a; font-size: 11px; font-weight: 700; }
+.ad-import-mapping-details[open] summary::after { content: "收起"; }
+.ad-import-mapping-details .ad-import-mapping-list { margin-top: 8px; }
 .ad-import-mapping-list { display: grid; gap: 7px; max-height: 180px; overflow: auto; }
 .ad-import-mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .85fr); align-items: center; gap: 12px; padding: 10px 11px; border: 1px solid #e7ecf4; border-radius: 10px; background: #fbfcff; }
 .ad-import-mapping-row b { display: block; overflow: hidden; color: #34415c; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

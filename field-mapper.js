@@ -105,13 +105,66 @@ const AMBIGUOUS = Object.freeze({
   result: ['leads', 'purchases'],
   '成效': ['leads', 'purchases'],
   '结果': ['leads', 'purchases'],
+  'cost per result': ['cpl', 'cpa'],
+  '单次成效费用': ['cpl', 'cpa'],
   cost: ['spend', 'cpc', 'cpa', 'cpl'],
+  value: ['metaAttributedGmv', 'purchases'],
+  revenue: ['metaAttributedGmv', 'deals'],
+  conversion: ['leads', 'purchases'],
+  conversions: ['leads', 'purchases'],
   views: ['impressions', 'landingPageViews'],
   view: ['impressions', 'landingPageViews'],
   sales: ['deals', 'purchases'],
   sale: ['deals', 'purchases'],
   checkout: ['initiateCheckout', 'checkoutCompletionRate']
 });
+
+// Strong metric tokens are intentionally stricter than the broad semantic
+// expressions above.  They make a standard metric with a descriptive suffix
+// (for example "CPM（千次展示费用）") importable without asking the user,
+// while broad words such as "Results" and "Cost" remain reviewable.
+const STRONG_METRIC_MATCHERS = Object.freeze([
+  ['linkClicks', /^(?:link|outbound|website)\s*clicks?\b|^(?:链接|网站|外链)\s*点击/],
+  ['linkCtr', /^(?:link|outbound)\s*(?:click\s*)?ctr\b|^链接(?:\s*点击)?(?:率|ctr)/],
+  ['landingPageViews', /^(?:landing\s*page\s*views?|lpv)\b|^落地页(?:浏览|访问)/],
+  ['lpvRate', /^(?:lpv\s*rate|landing\s*page\s*views?\s*rate)\b|^落地页(?:浏览|到达)率/],
+  ['addToCart', /^(?:adds?\s*to\s*cart|atc)\b|^(?:加购|加入购物车)/],
+  ['atcRate', /^(?:atc\s*rate|adds?\s*to\s*cart\s*rate)\b|^加购率/],
+  ['initiateCheckout', /^(?:initiat(?:e|ed)\s*checkout|checkouts?\s*initiated)\b|^(?:发起|开始)结账/],
+  ['checkoutRate', /^(?:checkout\s*rate|initiate\s*checkout\s*rate)\b|^(?:发起)?结账率/],
+  ['checkoutCompletionRate', /^(?:checkout|purchase)\s*completion\s*rate\b|^(?:结账|支付)完成率/],
+  ['purchaseCvr', /^purchase\s*(?:cvr|conversion\s*rate)\b|^购买(?:转化率|cvr)/],
+  ['metaAttributedGmv', /^(?:(?:meta\s*)?(?:attributed\s*)?(?:gmv|revenue)|(?:website\s*)?purchase\s*(?:conversion\s*)?value|purchase\s*value)\b|^(?:meta\s*)?(?:归因)?销售额|^购买转化价值/],
+  ['purchaseRoas', /^(?:purchase\s*)?roas\b|^return\s*on\s*ad\s*spend\b|^(?:购买\s*)?roas|^广告支出回报/],
+  ['cpa', /^(?:purchase\s*)?cpa\b|^cost\s*per\s*purchase\b|^单次购买成本|^购买成本/],
+  ['aov', /^aov\b|^average\s*order\s*value\b|^平均订单价值|^客单价/],
+  ['purchases', /^(?:website\s*)?purchases?\b|^购买(?:次数)?/],
+  ['formOpens', /^form\s*opens?\b|^表单打开/],
+  ['formSubmissions', /^form\s*submi(?:t|ssion)s?\b|^表单提交/],
+  ['cpl', /^(?:lead\s*)?cpl\b|^cost\s*per\s*lead\b|^(?:单条)?线索成本/],
+  ['leads', /^leads?(?:\s*(?:generated|collected|result))?\b|^(?:销售|表单)?线索|^潜在客户/],
+  ['spend', /^(?:spend|amount\s*spent|(?:ad|media)\s*spend)\b|^(?:广告\s*(?:花费|消耗)|投放\s*(?:花费|金额)|消耗\s*金额|已?花费)/],
+  ['impressions', /^(?:ad\s*)?impressions?\b|^(?:展示|曝光)(?:次数)?/],
+  ['reach', /^(?:unique\s*)?(?:reach|people\s*reached|unique\s*people)\b|^(?:覆盖(?:人数|用户)|触达人数|独立触达)/],
+  ['frequency', /^(?:(?:avg|average|ad)\s*)?frequency\b|^(?:平均\s*(?:展示)?频次|频次|人均曝光次数)/],
+  ['clicks', /^(?:(?:all|total)\s*)?clicks?\b|^(?:所有|全部)?点击(?:量)?/],
+  ['ctr', /^(?:ctr|click\s*through\s*rate)\b|^点击率/],
+  ['cpc', /^(?:link\s*)?cpc\b|^cost\s*per\s*(?:link\s*)?click\b|^单次(?:链接)?点击(?:费用|成本)|^点击成本/],
+  ['cpm', /^cpm\b|^cost\s*per\s*(?:1000|mille)\s*impressions?\b|^千次(?:展示|曝光)(?:费用|成本)/]
+]);
+
+// These columns are recognised as report metadata or optional supporting
+// metrics, but are not consumed by the current dashboard calculations.  They
+// should never become a blocking manual-confirmation task.
+const AUXILIARY_FIELD_MATCHERS = Object.freeze([
+  /^(?:country|国家)\s*code\b|^国家代码/,
+  /^campaign\s*type\b|^广告系列类型/,
+  /^(?:week|month|quarter)\s*(?:start|label)?\b|^(?:周|月份|季度)(?:开始|标签)?/,
+  /^(?:internal|ad|campaign|ad\s*set|account)\s*id\b|^(?:内部|广告|广告系列|广告组|账户)\s*id/,
+  /^(?:funnel|performance)\s*(?:type|tier)\b|^(?:漏斗|表现)(?:类型|层级)/,
+  /^cost\s*per\s*(?:lpv|landing\s*page\s*view|atc|add\s*to\s*cart|checkout|initiate\s*checkout)\b|^每(?:次)?(?:落地页浏览|加购|结账)(?:费用|成本)/,
+  /^(?:campaign\s*)?roas\s*(?:daily|weekly|monthly|quarterly|q\d|\d+d)?\b/
+]);
 
 const byCanonical = new Map(METRIC_DEFINITIONS.map(item => [item.canonicalMetric, item]));
 const aliasLookup = new Map();
@@ -141,9 +194,10 @@ function getResultContext(headers = [], sampleRows = []) {
 
 function ambiguousKey(normalized = '') {
   if (AMBIGUOUS[normalized]) return normalized;
-  // Unit and reporting-window suffixes do not resolve a semantic ambiguity.
+  // Unit, reporting-window, and initial-result suffixes do not resolve a
+  // semantic ambiguity. They should still be reviewed or use Result Type.
   const stripped = normalized
-    .replace(/(?:\s+(?:count|counts|times?|quantity|qty|number|amount|total|daily|weekly|monthly|quarterly|ytd|mtd|q\d|\d+d))+$/i, '')
+    .replace(/(?:\s+(?:count|counts|times?|quantity|qty|number|amount|total|daily|weekly|monthly|quarterly|ytd|mtd|q\d|\d+d|initial|初始))+$/i, '')
     .trim();
   return AMBIGUOUS[stripped] ? stripped : '';
 }
@@ -160,11 +214,14 @@ function exactResult(header, context) {
   const normalized = normalizeHeader(header);
   const key = ambiguousKey(normalized) || (explicitResultContext(normalized) ? 'results' : '');
   if (!key) return null;
-  if (context) {
-    const definition = getMetricDefinition(context);
+  const contextualMetric = key === 'cost per result' || key === '单次成效费用'
+    ? (context === 'leads' ? 'cpl' : context === 'purchases' ? 'cpa' : '')
+    : context;
+  if (contextualMetric) {
+    const definition = getMetricDefinition(contextualMetric);
     return {
-      sourceHeader: String(header ?? ''), canonicalMetric: context, internalKey: definition.internalKey,
-      confidence: 0.9, matchType: 'context', status: 'confirmed', candidates: [context]
+      sourceHeader: String(header ?? ''), canonicalMetric: contextualMetric, internalKey: definition.internalKey,
+      confidence: 0.9, matchType: 'context', status: 'confirmed', candidates: [contextualMetric]
     };
   }
   return {
@@ -180,19 +237,38 @@ function buildMatch(header, definition, confidence, matchType, status = confiden
   };
 }
 
-export function resolveMetric(header, { headers = [], sampleRows = [] } = {}) {
+export function resolveMetric(header, { headers = [], sampleRows = [], customMappings = {} } = {}) {
   const sourceHeader = String(header ?? '').trim();
   if (!sourceHeader) return { sourceHeader, canonicalMetric: null, internalKey: null, confidence: 0, matchType: 'unused', status: 'unused', candidates: [] };
   const normalized = normalizeHeader(sourceHeader);
   const contextual = exactResult(sourceHeader, explicitResultContext(normalized) || getResultContext(headers, sampleRows));
-  if (contextual) return contextual;
+  // Explicit generic conversion labels must not be hijacked by Meta's raw
+  // `conversions` payload field. They need Result Type or manual confirmation.
+  if (AMBIGUOUS[normalized] && contextual) return contextual;
+  // File-level Result Type / Objective context is more trustworthy than a
+  // previously remembered generic mapping such as "Results".
+  if (contextual?.status === 'confirmed') return contextual;
   const direct = aliasLookup.get(compact(sourceHeader));
   if (direct) return buildMatch(sourceHeader, direct, normalized === normalizeHeader(direct.canonicalMetric) ? 1 : 0.97, normalized === normalizeHeader(direct.canonicalMetric) ? 'exact_alias' : 'normalized_alias');
+  const rememberedMetric = customMappings?.[normalized];
+  const rememberedDefinition = rememberedMetric ? getMetricDefinition(rememberedMetric) : null;
+  if (rememberedDefinition) return buildMatch(sourceHeader, rememberedDefinition, 1, 'remembered_mapping', 'confirmed');
+  if (contextual) return contextual;
+
+  if (AUXILIARY_FIELD_MATCHERS.some(pattern => pattern.test(normalized))) {
+    return { sourceHeader, canonicalMetric: null, internalKey: null, confidence: 1, matchType: 'auxiliary', status: 'unused', candidates: [] };
+  }
+
+  const strongMatches = STRONG_METRIC_MATCHERS
+    .filter(([, pattern]) => pattern.test(normalized))
+    .map(([metric]) => getMetricDefinition(metric))
+    .filter(Boolean);
+  if (strongMatches.length === 1) return buildMatch(sourceHeader, strongMatches[0], 0.93, 'strong_token', 'confirmed');
 
   const matches = METRIC_DEFINITIONS.filter(definition => definition.semantic?.test(normalized));
   // Semantic-only matches remain reviewable: a custom header such as
   // "Campaign Type" contains the word Campaign but must never replace the
-  // actual Campaign column. Exact and normalised aliases still auto-confirm.
+  // actual Campaign column. Exact, normalised, and strong-token aliases auto-confirm.
   if (matches.length === 1) return buildMatch(sourceHeader, matches[0], 0.72, 'semantic');
   if (matches.length > 1) {
     return {
@@ -203,10 +279,10 @@ export function resolveMetric(header, { headers = [], sampleRows = [] } = {}) {
   return { sourceHeader, canonicalMetric: null, internalKey: null, confidence: 0, matchType: 'unused', status: 'unused', candidates: [] };
 }
 
-export function buildHeaderMapping(headers = [], { sampleRows = [], sheetId = '' } = {}) {
+export function buildHeaderMapping(headers = [], { sampleRows = [], sheetId = '', customMappings = {} } = {}) {
   const usedInternalKeys = new Set();
   return headers.map((header, index) => {
-    const result = { ...resolveMetric(header, { headers, sampleRows }), index, id: `${sheetId}:${index}` };
+    const result = { ...resolveMetric(header, { headers, sampleRows, customMappings }), index, id: `${sheetId}:${index}` };
     if (result.status === 'confirmed' && usedInternalKeys.has(result.internalKey)) {
       result.status = 'unused'; result.matchType = 'duplicate'; result.confidence = 0; result.candidates = [];
       result.canonicalMetric = null; result.internalKey = null;
@@ -237,4 +313,30 @@ export function mappingConfidenceLabel(confidence = 0) {
 
 export function confirmedMetricKeys(mapping = []) {
   return [...new Set(mapping.filter(item => item.status === 'confirmed' && item.internalKey).map(item => item.internalKey))];
+}
+
+
+/**
+ * Groups field-mapping rows for the confirmation UI. Confirmed rows collapse
+ * by canonical metric, while unresolved and unused rows collapse by their
+ * normalised source header. Parser mappings are left untouched so every sheet
+ * still imports its own confirmed column.
+ */
+export function groupMappingForDisplay(rows = [], status) {
+  const groups = new Map();
+  rows.filter(item => item.status === status && !(status === 'unused' && item.matchType === 'duplicate')).forEach(item => {
+    const key = status === 'confirmed'
+      ? `${status}:${item.canonicalMetric || item.internalKey || normalizeHeader(item.sourceHeader)}`
+      : `${status}:${normalizeHeader(item.sourceHeader) || item.id}`;
+    const group = groups.get(key) || {
+      ...item, sourceHeaders: [], sheetNames: [], matchTypes: [], candidates: [], mapIds: []
+    };
+    if (item.sourceHeader && !group.sourceHeaders.includes(item.sourceHeader)) group.sourceHeaders.push(item.sourceHeader);
+    if (item.sheetName && !group.sheetNames.includes(item.sheetName)) group.sheetNames.push(item.sheetName);
+    if (item.matchType && !group.matchTypes.includes(item.matchType)) group.matchTypes.push(item.matchType);
+    (item.candidates || []).forEach(candidate => { if (!group.candidates.includes(candidate)) group.candidates.push(candidate); });
+    group.mapIds.push(item.id);
+    groups.set(key, group);
+  });
+  return [...groups.values()];
 }

@@ -175,31 +175,31 @@ export async function readSpreadsheetRows(file) {
   return sheets[0]?.rows || [];
 }
 
-function analyseSheet(rows = [], fileName = '', sheetName = '') {
+function analyseSheet(rows = [], fileName = '', sheetName = '', options = {}) {
   let best = null;
   const limit = Math.min(rows.length, 15);
   for (let rowIndex = 0; rowIndex < limit; rowIndex += 1) {
     const headers = rows[rowIndex] || [];
     if (!headers.some(value => String(value ?? '').trim())) continue;
     const sampleRows = rows.slice(rowIndex + 1, rowIndex + 21);
-    const mapping = buildHeaderMapping(headers, { sampleRows, sheetId: `${fileName}::${sheetName}::${rowIndex}` });
+    const mapping = buildHeaderMapping(headers, { sampleRows, sheetId: `${fileName}::${sheetName}::${rowIndex}`, customMappings: options.customMappings || {} });
     const score = mapping.filter(item => item.status !== 'unused').length;
     if (!best || score > best.score) best = { headerIndex: rowIndex, headers, mapping, score };
   }
   return best?.score ? best : { headerIndex: -1, headers: [], mapping: [], score: 0 };
 }
 
-function planForRows(rows, fileName, sheetName, mapping) {
+function planForRows(rows, fileName, sheetName, mapping, options = {}) {
   if (mapping?.length) {
     const headerIndex = mapping[0]?.headerIndex;
-    return { headerIndex: Number.isInteger(headerIndex) ? headerIndex : analyseSheet(rows, fileName, sheetName).headerIndex, mapping };
+    return { headerIndex: Number.isInteger(headerIndex) ? headerIndex : analyseSheet(rows, fileName, sheetName, options).headerIndex, mapping };
   }
-  const analysis = analyseSheet(rows, fileName, sheetName);
+  const analysis = analyseSheet(rows, fileName, sheetName, options);
   return { headerIndex: analysis.headerIndex, mapping: analysis.mapping };
 }
 
-export function previewAdRows(rows, fileName = '', sheetName = '') {
-  const analysis = analyseSheet(rows, fileName, sheetName);
+export function previewAdRows(rows, fileName = '', sheetName = '', options = {}) {
+  const analysis = analyseSheet(rows, fileName, sheetName, options);
   const mapping = analysis.mapping.map(item => ({ ...item, headerIndex: analysis.headerIndex }));
   return {
     fileName, sheetName, rows, headerIndex: analysis.headerIndex, headers: analysis.headers,
@@ -210,7 +210,7 @@ export function previewAdRows(rows, fileName = '', sheetName = '') {
 
 export function parseAdRows(rows, fileName = '', sheetName = '', options = {}) {
   const all = [];
-  const fallback = previewAdRows(rows, fileName, sheetName);
+  const fallback = previewAdRows(rows, fileName, sheetName, { customMappings: options.customMappings || {} });
   const headerIndex = options.mapping?.[0]?.headerIndex ?? fallback.headerIndex;
   if (headerIndex < 0) return all;
   const mapping = applyMappingOverrides(options.mapping || fallback.mapping, options.overrides || {});
@@ -275,10 +275,10 @@ export function parseAdWorkbook(workbook, fileName = '') {
   return all;
 }
 
-export async function previewAdFiles(files) {
+export async function previewAdFiles(files, options = {}) {
   const parsed = await Promise.all([...files].map(async file => {
     const sheets = await readWorkbookSheets(file);
-    return sheets.map(sheet => previewAdRows(sheet.rows, file.name, sheet.name));
+    return sheets.map(sheet => previewAdRows(sheet.rows, file.name, sheet.name, { customMappings: options.customMappings || {} }));
   }));
   const sheets = parsed.flat();
   return {
@@ -288,11 +288,13 @@ export async function previewAdFiles(files) {
   };
 }
 
-export function parseAdImportPreview(preview, overrides = {}) {
-  return (preview?.sheets || []).flatMap(sheet => parseAdRows(sheet.rows, sheet.fileName, sheet.sheetName, { mapping: sheet.mapping, overrides }));
+export function parseAdImportPreview(preview, overrides = {}, options = {}) {
+  return (preview?.sheets || []).flatMap(sheet => parseAdRows(sheet.rows, sheet.fileName, sheet.sheetName, {
+    mapping: sheet.mapping, overrides, customMappings: options.customMappings || {}
+  }));
 }
 
 export async function importAdFiles(files, options = {}) {
-  const preview = await previewAdFiles(files);
-  return parseAdImportPreview(preview, options.overrides || {});
+  const preview = await previewAdFiles(files, { customMappings: options.customMappings || {} });
+  return parseAdImportPreview(preview, options.overrides || {}, { customMappings: options.customMappings || {} });
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { normalizeHeader, resolveMetric, buildHeaderMapping, applyMappingOverrides } from '../field-mapper.js';
+import { normalizeHeader, resolveMetric, buildHeaderMapping, applyMappingOverrides, groupMappingForDisplay } from '../field-mapper.js';
 import { parseAdRows } from '../excel-import.js';
 
 function maps(header, metric, internalKey) {
@@ -56,3 +56,63 @@ assert.equal(rows[0].creativeType, 'Video');
 assert.deepEqual(parseAdRows([['Internal Tag'], ['x']]), [], 'unknown fields should not block valid fields but cannot import alone');
 
 console.log('field mapper tests passed');
+
+// Strong metric tokens with descriptive suffixes auto-confirm.
+for (const [header, metric] of [
+  ['CPM（千次展示费用）', 'cpm'],
+  ['CPC（单次点击费用）', 'cpc'],
+  ['CTR（点击率）', 'ctr'],
+  ['Frequency（频次）', 'frequency'],
+  ['Reach（覆盖人数）', 'reach'],
+  ['Spend_USD', 'spend'],
+  ['Purchase_ROAS', 'purchaseRoas'],
+  ['AOV（平均订单价值）', 'aov']
+]) {
+  const result = resolveMetric(header);
+  assert.equal(result.canonicalMetric, metric, `${header} should strongly map to ${metric}`);
+  assert.equal(result.status, 'confirmed', `${header} should not need confirmation`);
+  assert.ok(['exact_alias', 'normalized_alias', 'strong_token'].includes(result.matchType), `${header} should use a high-confidence matcher`);
+}
+
+// Supporting metadata and optional cost columns are unused, not ambiguous.
+for (const header of ['Country Code', 'Campaign Type', 'Week Label', 'Internal ID', 'Cost per LPV']) {
+  const result = resolveMetric(header);
+  assert.equal(result.status, 'unused', `${header} should be unused`);
+  assert.notEqual(result.matchType, 'ambiguous', `${header} should not require confirmation`);
+}
+
+// A generic Results field remains ambiguous, while contextual Results resolves automatically.
+assert.equal(resolveMetric('Results').status, 'needs_confirmation');
+assert.equal(resolveMetric('Results', { headers: ['Results', 'Result Type'], sampleRows: [[3, 'Leads']] }).canonicalMetric, 'leads');
+assert.equal(resolveMetric('Results', { headers: ['Results', 'Result Type'], sampleRows: [[3, 'Purchases']] }).canonicalMetric, 'purchases');
+
+// User-confirmed mappings can be remembered per B2B/B2C scope by the caller.
+assert.equal(resolveMetric('Inquiry Count', { customMappings: { inquiry: 'leads' } }).canonicalMetric, 'leads');
+assert.equal(resolveMetric('Inquiry Count', { customMappings: { inquiry: 'leads' } }).matchType, 'remembered_mapping');
+
+// Duplicate columns are imported once, and the display model collapses rows
+// with the same canonical metric/source header across sheets.
+const duplicateMapping = buildHeaderMapping(['CPM（千次展示费用）', 'CPM（千次展示费用）'], { sheetId: 'sheet-1' });
+assert.equal(duplicateMapping.filter(item => item.status === 'confirmed').length, 1);
+assert.equal(duplicateMapping.filter(item => item.matchType === 'duplicate').length, 1);
+const grouped = groupMappingForDisplay([
+  { ...duplicateMapping[0], sheetName: 'A' },
+  { ...duplicateMapping[1], sheetName: 'A' },
+  { ...resolveMetric('CPM_USD'), id: 'sheet-2:0', sheetName: 'B' }
+], 'confirmed');
+assert.equal(grouped.length, 1);
+assert.deepEqual(grouped[0].sourceHeaders, ['CPM（千次展示费用）', 'CPM_USD']);
+const groupedUnused = groupMappingForDisplay([
+  { ...duplicateMapping[1], sheetName: 'A' }
+], 'unused');
+assert.equal(groupedUnused.length, 0, 'duplicate columns should not be shown as a second unused field');
+
+console.log('field mapper confirmation tests passed');
+
+// Result-cost fields require context, but resolve automatically when Result Type is supplied.
+assert.equal(resolveMetric('Cost per Result').status, 'needs_confirmation');
+assert.equal(resolveMetric('单次成效费用').status, 'needs_confirmation');
+assert.equal(resolveMetric('Cost per Result', { headers: ['Cost per Result', 'Result Type'], sampleRows: [[20, 'Leads']] }).canonicalMetric, 'cpl');
+assert.equal(resolveMetric('Cost per Result', { headers: ['Cost per Result', 'Result Type'], sampleRows: [[20, 'Purchases']] }).canonicalMetric, 'cpa');
+assert.equal(resolveMetric('Revenue').status, 'needs_confirmation');
+assert.equal(resolveMetric('Conversion').status, 'needs_confirmation');

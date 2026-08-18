@@ -1,6 +1,6 @@
 import { BUSINESS_MODE, DEFAULT_COMMERCE_RULES, DEFAULT_RULES, LEAD_FIELDS, createAdRecord } from './data-model.js';
 import { parseAdImportPreview, previewAdFiles } from './excel-import.js';
-import { applyMappingOverrides, getMetricLabel, mappingConfidenceLabel } from './field-mapper.js';
+import { applyMappingOverrides, getMetricLabel, groupMappingForDisplay, mappingConfidenceLabel, normalizeHeader } from './field-mapper.js';
 import { readLeadFiles, suggestedMapping, mapLeadFiles, matchLeadsToAds } from './lead-import.js';
 import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroups, leadMetrics, classifyLead, averageFrequency, frequencySignals } from './metrics.js';
 import { diagnose, RISK_ORDER } from './diagnosis.js';
@@ -14,6 +14,7 @@ const $ = id => document.getElementById(id);
 const RULES_KEY = 'personal-ads-intelligence-rules-v1';
 const BUSINESS_MODE_KEY = 'personal-ads-intelligence-business-mode-v1';
 const COMMERCE_STOP_HITS_KEY = 'personal-ads-intelligence-commerce-stop-hits-v1';
+const CUSTOM_FIELD_MAPPINGS_KEY = 'personal-ads-intelligence-custom-field-mappings-v1';
 const ACTION_SCOPE = 'default';
 const COMMERCE_ACTION_SCOPE = 'b2c';
 const LIST_LIMIT = 5;
@@ -44,6 +45,7 @@ const state = {
   rules: { ...DEFAULT_RULES },
   commerceRules: { ...DEFAULT_COMMERCE_RULES },
   businessMode: localStorage.getItem(BUSINESS_MODE_KEY) === BUSINESS_MODE.B2C_ECOMMERCE ? BUSINESS_MODE.B2C_ECOMMERCE : BUSINESS_MODE.B2B_LEAD,
+  customFieldMappings: loadCustomFieldMappings(),
   commerceExpanded: { advice: false, risks: false, countries: false, campaigns: false, creatives: false },
   commerceRiskVisibleCount: LIST_LIMIT,
   commerceRiskFilter: 'all',
@@ -964,13 +966,45 @@ function recognisedFieldCount(ads = []) {
 
 function mappingPreviewModal() { return $('adImportMappingModal'); }
 
+function loadCustomFieldMappings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_FIELD_MAPPINGS_KEY) || '{}');
+    return { b2b: saved?.b2b || {}, b2c: saved?.b2c || {} };
+  } catch { return { b2b: {}, b2c: {} }; }
+}
+
+function customMappingsForMode(mode) {
+  return state.customFieldMappings[mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b'] || {};
+}
+
+function saveCustomFieldMappings() {
+  try { localStorage.setItem(CUSTOM_FIELD_MAPPINGS_KEY, JSON.stringify(state.customFieldMappings)); } catch { /* Browser storage is optional. */ }
+}
+
+function rememberConfirmedFieldMappings(pending, overrides) {
+  const scope = pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b';
+  const mappingById = new Map(pending.preview.sheets.flatMap(sheet => sheet.mapping.map(item => [item.id, item])));
+  let changed = false;
+  Object.entries(overrides).forEach(([id, metric]) => {
+    if (!metric || metric === 'ignore') return;
+    const item = mappingById.get(id);
+    const key = normalizeHeader(item?.sourceHeader || '');
+    if (!key) return;
+    state.customFieldMappings[scope][key] = metric;
+    changed = true;
+  });
+  if (changed) saveCustomFieldMappings();
+}
+
 function previewNeedsReview(preview) {
   return preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'));
 }
 
 function pendingImportOverrides() {
   const modal = mappingPreviewModal();
-  return Object.fromEntries([...modal.querySelectorAll('[data-ad-import-map]')].map(select => [select.dataset.adImportMap, select.value]));
+  return Object.fromEntries([...modal.querySelectorAll('[data-ad-import-map-ids]')]
+    .flatMap(select => String(select.dataset.adImportMapIds || '').split(',').filter(Boolean)
+      .map(value => [decodeURIComponent(value), select.value])));
 }
 
 function renderAdImportMappingPreview() {
@@ -978,16 +1012,26 @@ function renderAdImportMappingPreview() {
   if (!pending) return;
   const modal = mappingPreviewModal();
   const rows = pending.preview.sheets.flatMap(sheet => sheet.mapping.map(item => ({ ...item, sheetName: sheet.sheetName })));
-  const confirmed = rows.filter(item => item.status === 'confirmed');
-  const review = rows.filter(item => item.status === 'needs_confirmation');
-  const unused = rows.filter(item => item.status === 'unused');
-  $('adImportMappingSummary').textContent = `已识别 ${confirmed.length} 个字段${review.length ? `；${review.length} 个字段需要确认` : ''}${unused.length ? `；${unused.length} 个未使用` : ''}。`;
+  const confirmed = groupMappingForDisplay(rows, 'confirmed');
+  const review = groupMappingForDisplay(rows, 'needs_confirmation');
+  const unused = groupMappingForDisplay(rows, 'unused');
+  $('adImportMappingSummary').textContent = `已自动识别 ${confirmed.length} 个字段${review.length ? `；${review.length} 个字段需要确认` : ''}${unused.length ? `；${unused.length} 个未使用` : ''}。辅助字段默认不导入，不会阻止继续导入。`;
+  $('adImportMappingConfirmedTitle').textContent = `已自动识别（${confirmed.length}）`;
+  $('adImportMappingReviewTitle').textContent = `需要确认（${review.length}）`;
+  $('adImportMappingUnusedTitle').textContent = `未使用字段（${unused.length}）`;
+  const sections = modal.querySelectorAll('.ad-import-mapping-details');
+  if (sections[0]) sections[0].open = false;
+  if (sections[1]) sections[1].open = review.length > 0;
+  if (sections[2]) sections[2].open = false;
   const fieldRow = item => {
     const options = ['<option value="ignore">不导入 / 未使用</option>', ...item.candidates.map(metric => `<option value="${esc(metric)}">${esc(getMetricLabel(metric))}</option>`)].join('');
+    const encodedIds = item.mapIds.map(id => encodeURIComponent(id)).join(',');
     const control = item.status === 'needs_confirmation'
-      ? `<select data-ad-import-map="${esc(item.id)}">${options}</select>`
+      ? `<select data-ad-import-map-ids="${esc(encodedIds)}">${options}</select>`
       : `<span class="ad-import-mapping-status ${esc(item.status)}">${item.status === 'confirmed' ? `${esc(getMetricLabel(item.canonicalMetric))} · ${esc(mappingConfidenceLabel(item.confidence))}` : '未使用'}</span>`;
-    return `<div class="ad-import-mapping-row"><div><b>${esc(item.sourceHeader || '（空表头）')}</b><small>${esc(item.sheetName)} · ${esc(item.matchType)}</small></div><div>${control}</div></div>`;
+    const sourceHeaders = item.sourceHeaders.length ? item.sourceHeaders.join(' / ') : '（空表头）';
+    const sourceInfo = [item.sheetNames.length > 1 ? `${item.sheetNames.length} 个 Sheet` : item.sheetNames[0], item.matchTypes.join(' · ')].filter(Boolean).join(' · ');
+    return `<div class="ad-import-mapping-row"><div><b>${esc(sourceHeaders)}</b><small>${esc(sourceInfo)}</small></div><div>${control}</div></div>`;
   };
   $('adImportMappingConfirmed').innerHTML = confirmed.length ? confirmed.map(fieldRow).join('') : '<div class="empty">暂未自动确认字段。</div>';
   $('adImportMappingReview').innerHTML = review.length ? review.map(fieldRow).join('') : '<div class="mini-note">没有需要人工确认的歧义字段。</div>';
@@ -1014,7 +1058,7 @@ async function beginAdImport(files, mode) {
     return;
   }
   try {
-    const preview = await previewAdFiles(usable);
+    const preview = await previewAdFiles(usable, { customMappings: customMappingsForMode(mode) });
     if (!preview.confirmedColumns && !preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'))) {
       toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：未识别到可支持的 Meta 广告字段，请检查文件表头。' : '未识别到可支持的 Meta 广告字段，请检查文件表头。');
       return;
@@ -1037,7 +1081,8 @@ async function applyAdImportMapping() {
     return;
   }
   try {
-    const ads = parseAdImportPreview(pending.preview, overrides);
+    const ads = parseAdImportPreview(pending.preview, overrides, { customMappings: customMappingsForMode(pending.mode) });
+    rememberConfirmedFieldMappings(pending, overrides);
     if (!ads.length) {
       toast(pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：没有可用数据记录。' : '广告报表导入失败：没有可用数据记录。');
       return;

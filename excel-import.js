@@ -1,5 +1,5 @@
-import { AD_ALIASES, createAdRecord, findAliasKey, toDate, toNumber } from './data-model.js';
-import { extractMetaConversions } from './commerce-mapping.js';
+import { AD_ALIASES, AD_METRIC_KEYS, createAdRecord, findAliasKey, toDate, toOptionalNumber } from './data-model.js';
+import { extractMetaConversionAvailability, extractMetaConversions } from './commerce-mapping.js';
 
 export function parseCsvText(text) {
   const rows = [];
@@ -176,12 +176,12 @@ export async function readSpreadsheetRows(file) {
 function findHeader(rows) {
   for (let rowIndex = 0; rowIndex < Math.min(rows.length, 15); rowIndex += 1) {
     const found = rows[rowIndex].filter(value => findAliasKey(value, AD_ALIASES)).length;
-    if (found >= 2) return rowIndex;
+    if (found >= 1) return rowIndex;
   }
   return -1;
 }
 
-function parseAdRows(rows, fileName = '', sheetName = '') {
+export function parseAdRows(rows, fileName = '', sheetName = '') {
   const all = [];
   const headerIndex = findHeader(rows);
   if (headerIndex < 0) return all;
@@ -190,33 +190,48 @@ function parseAdRows(rows, fileName = '', sheetName = '') {
     const key = findAliasKey(value, AD_ALIASES);
     if (key && map[key] === undefined) map[key] = index;
   });
-  if (map.spend === undefined && map.results === undefined && map.purchases === undefined) return all;
+  if (!Object.keys(map).length) return all;
+  const mappedKeys = Object.keys(map);
+  const get = (row, key) => map[key] === undefined ? null : row[map[key]];
+  const hasValue = value => value !== null && value !== undefined && String(value).trim() !== '';
+  const numeric = (row, key) => toOptionalNumber(get(row, key));
+
   for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
+    const row = rows[rowIndex] || [];
     if (!row.some(value => String(value ?? '').trim())) continue;
-    const get = key => map[key] === undefined ? '' : row[map[key]];
-    const country = String(get('country') || '未分类').trim();
-    const campaign = String(get('campaign') || '未命名广告系列').trim();
+    if (!mappedKeys.some(key => hasValue(get(row, key)))) continue;
+    const country = String(get(row, 'country') ?? '未分类').trim() || '未分类';
+    const campaign = String(get(row, 'campaign') ?? '未命名广告系列').trim() || '未命名广告系列';
     if (/^(total|合计|总计|汇总)$/i.test(country) || /^(total|合计|总计|汇总)$/i.test(campaign)) continue;
     const sourceRaw = Object.fromEntries(rows[headerIndex].map((header, index) => [String(header || '').trim(), row[index]]).filter(([key]) => key));
+    const sourceRows = Object.fromEntries(mappedKeys.map(key => [key, get(row, key)]));
     const conversions = extractMetaConversions({
-      landingPageViews: get('landingPageViews'), addToCart: get('addToCart'), initiateCheckout: get('initiateCheckout'), purchases: get('purchases'), metaAttributedGmv: get('metaAttributedGmv'), sourceRaw
+      landingPageViews: get(row, 'landingPageViews'), addToCart: get(row, 'addToCart'), initiateCheckout: get(row, 'initiateCheckout'),
+      purchases: get(row, 'purchases'), metaAttributedGmv: get(row, 'metaAttributedGmv'), sourceRows, sourceRaw
     });
+    const conversionAvailable = extractMetaConversionAvailability({ sourceRows, sourceRaw });
+    const availableMetrics = Object.fromEntries(AD_METRIC_KEYS.map(key => [
+      key,
+      (map[key] !== undefined && hasValue(get(row, key))) || Boolean(conversionAvailable[key])
+    ]));
+    const conversionValues = Object.fromEntries(Object.keys(conversions).map(key => [key, conversionAvailable[key] ? conversions[key] : null]));
+    const percent = key => { const value = numeric(row, key); return value === null ? null : value / (String(get(row, key)).includes('%') ? 100 : 1); };
     const ad = createAdRecord({
-      date: toDate(get('date') || get('dateStart')),
-      platform: String(get('platform') || 'Meta').trim(), country, product: String(get('product')).trim(),
-      accountId: String(get('accountId')).trim(), accountName: String(get('accountName')).trim(), campaignId: String(get('campaignId')).trim(), campaign,
-      adSetId: String(get('adSetId')).trim(), adSet: String(get('adSet')).trim(), adId: String(get('adId')).trim(), ad: String(get('ad')).trim(),
-      creative: String(get('creative')).trim(), creativeType: String(get('creativeType')).trim(), audienceType: String(get('audienceType')).trim(), placement: String(get('placement')).trim(), status: String(get('status')).trim(),
-      startTime: toDate(get('startTime')), budget: toNumber(get('budget')), currency: String(get('currency') || 'USD').trim(), timezone: String(get('timezone')).trim(),
-      spend: toNumber(get('spend')), impressions: toNumber(get('impressions')), reach: toNumber(get('reach')), frequency: toNumber(get('frequency')), allClicks: toNumber(get('allClicks')), clicks: toNumber(get('clicks')),
-      ctr: toNumber(get('ctr')) / (String(get('ctr')).includes('%') ? 100 : 1), allCtr: toNumber(get('allCtr')) / (String(get('allCtr')).includes('%') ? 100 : 1), cpc: toNumber(get('cpc')), cpm: toNumber(get('cpm')),
-      ...conversions,
-      formOpens: toNumber(get('formOpens')), formSubmits: toNumber(get('formSubmits')), results: toNumber(get('results')), costPerResult: toNumber(get('costPerResult')),
-      dateStart: toDate(get('dateStart') || get('date')), dateEnd: toDate(get('dateEnd') || get('date')), sourceFile: fileName, sourceSheet: sheetName,
-      sourceRows: Object.fromEntries(Object.entries(map).map(([key, index]) => [key, row[index]])), sourceRaw
+      date: toDate(get(row, 'date') || get(row, 'dateStart')),
+      platform: String(get(row, 'platform') || 'Meta').trim(), country, product: String(get(row, 'product') || '').trim(),
+      accountId: String(get(row, 'accountId') || '').trim(), accountName: String(get(row, 'accountName') || '').trim(), campaignId: String(get(row, 'campaignId') || '').trim(), campaign,
+      adSetId: String(get(row, 'adSetId') || '').trim(), adSet: String(get(row, 'adSet') || '').trim(), adId: String(get(row, 'adId') || '').trim(), ad: String(get(row, 'ad') || '').trim(),
+      creative: String(get(row, 'creative') || '').trim(), creativeType: String(get(row, 'creativeType') || '').trim(), audienceType: String(get(row, 'audienceType') || '').trim(), placement: String(get(row, 'placement') || '').trim(), status: String(get(row, 'status') || '').trim(),
+      startTime: toDate(get(row, 'startTime')), budget: numeric(row, 'budget'), currency: String(get(row, 'currency') || 'USD').trim(), timezone: String(get(row, 'timezone') || '').trim(),
+      spend: numeric(row, 'spend'), impressions: numeric(row, 'impressions'), reach: numeric(row, 'reach'), frequency: numeric(row, 'frequency'), allClicks: numeric(row, 'allClicks'), clicks: numeric(row, 'clicks'),
+      ctr: percent('ctr'), allCtr: percent('allCtr'), cpc: numeric(row, 'cpc'), cpm: numeric(row, 'cpm'),
+      lpvRate: percent('lpvRate'), atcRate: percent('atcRate'), checkoutRate: percent('checkoutRate'), checkoutCompletionRate: percent('checkoutCompletionRate'), purchaseCvr: percent('purchaseCvr'),
+      ...conversionValues, roas: numeric(row, 'roas'), cpa: numeric(row, 'cpa'), aov: numeric(row, 'aov'),
+      formOpens: numeric(row, 'formOpens'), formSubmits: numeric(row, 'formSubmits'), results: numeric(row, 'results'), costPerResult: numeric(row, 'costPerResult'),
+      dateStart: toDate(get(row, 'dateStart') || get(row, 'date')), dateEnd: toDate(get(row, 'dateEnd') || get(row, 'date')), sourceFile: fileName, sourceSheet: sheetName,
+      availableMetrics, sourceRows, sourceRaw
     });
-    if (ad.spend || ad.results || ad.purchases || ad.impressions || ad.clicks) all.push(ad);
+    all.push(ad);
   }
   return all;
 }

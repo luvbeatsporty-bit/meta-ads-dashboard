@@ -397,15 +397,15 @@ function renderDashboard() {
   const total = sumAds(rows);
   const haveData = state.ads.length > 0;
 
-  const reachAvailable = rows.some(row => Object.hasOwn(row.sourceRows || {}, 'reach') || Number(row.reach) > 0);
+  const available = total.availableMetrics;
   const frequency = averageFrequency(rows);
-  $('mSpend').textContent = haveData ? money(total.spend) : '—';
-  $('mLeads').textContent = haveData ? integer(total.results) : '—';
-  $('mCpl').textContent = haveData && total.results ? money(total.spend / total.results) : '—';
-  $('mClicks').textContent = haveData ? integer(total.clicks) : '—';
-  $('mCtr').textContent = haveData ? pct(total.impressions ? total.clicks / total.impressions : 0) : '—';
-  $('mCpm').textContent = haveData ? money(total.impressions ? total.spend / total.impressions * 1000 : 0) : '—';
-  $('mReach').textContent = haveData && reachAvailable ? integer(total.reach) : '—';
+  $('mSpend').textContent = haveData && available.spend ? money(total.spend) : '—';
+  $('mLeads').textContent = haveData && available.results ? integer(total.results) : '—';
+  $('mCpl').textContent = haveData && total.cpl !== null ? money(total.cpl) : '—';
+  $('mClicks').textContent = haveData && available.clicks ? integer(total.clicks) : '—';
+  $('mCtr').textContent = haveData && total.ctr !== null ? pct(total.ctr) : '—';
+  $('mCpm').textContent = haveData && total.cpm !== null ? money(total.cpm) : '—';
+  $('mReach').textContent = haveData && available.reach ? integer(total.reach) : '—';
   $('mFrequency').textContent = haveData && frequency !== null ? `${frequency.toFixed(1)} 次` : '—';
 
   const countries = summarise(rows, 'country');
@@ -952,6 +952,14 @@ async function clearCommerceData() {
   toast(saved ? '已清除 B2C 广告数据；B2B 数据和规则设置保持不变' : '已清除 B2C 广告数据；B2B 数据和规则设置保持不变');
 }
 
+function recognisedFieldCount(ads = []) {
+  const fields = new Set();
+  ads.forEach(ad => Object.entries(ad.availableMetrics || {}).forEach(([key, available]) => {
+    if (available) fields.add(key);
+  }));
+  return fields.size;
+}
+
 async function importAds(files) {
   const selected = [...files];
   if (selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) { toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。'); return; }
@@ -960,7 +968,7 @@ async function importAds(files) {
   markDataChanged();
   const ads = await importAdFiles(usable);
   if (!ads.length) {
-    toast('未识别到可分析的广告字段。请检查报表表头。');
+    toast('未识别到可支持的 Meta 广告字段，请检查文件表头。');
     return;
   }
   state.ads = ads;
@@ -974,7 +982,7 @@ async function importAds(files) {
   resetExpandedLists();
   resetDetailCharts();
   renderDashboard();
-  toast(`已导入 ${ads.length} 条广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  toast(`已导入 ${ads.length} 条广告记录，识别到 ${recognisedFieldCount(ads)} 个可分析字段${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
 }
 
 function commerceImportErrorMessage(error) {
@@ -1000,7 +1008,7 @@ async function importCommerceAds(files) {
     markDataChanged();
     const ads = await importAdFiles(usable);
     if (!ads.length) {
-      toast('B2C 广告报表导入失败：未识别到 Spend、Purchase、Impressions 等可分析字段，请检查报表表头。');
+      toast('B2C 广告报表导入失败：未识别到可支持的 Meta 广告字段，请检查文件表头。');
       return;
     }
     state.commerceAds = ads;
@@ -1011,7 +1019,7 @@ async function importCommerceAds(files) {
     const saved = await persistImportedData();
     resetCommerceViewState();
     renderDashboard();
-    toast(`已导入 ${ads.length} 条 B2C 广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+    toast(`已导入 ${ads.length} 条 B2C 广告记录，识别到 ${recognisedFieldCount(ads)} 个可分析字段${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
   } catch (error) {
     console.error('B2C 广告报表导入失败', error);
     toast(commerceImportErrorMessage(error));

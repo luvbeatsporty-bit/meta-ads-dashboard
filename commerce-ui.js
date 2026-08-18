@@ -169,12 +169,13 @@ export function renderCommerceTrend(rows, metric = 'spend') {
 }
 
 function funnelStageHealth(stage, totals) {
-  if (stage.key === 'linkClicks' && totals.impressions >= 1000 && totals.ctr !== null && totals.ctr < .008) return ['watch', 'CTR 偏低'];
-  if (stage.key === 'landingPageViews' && totals.linkClicks >= 10 && totals.lpvRate !== null && totals.lpvRate < .7) return ['watch', 'LPV 偏低'];
-  if (stage.key === 'addToCart' && totals.landingPageViews >= 15 && totals.atcRate !== null && totals.atcRate < .05) return ['high', '加购偏低'];
-  if (stage.key === 'initiateCheckout' && totals.addToCart >= 5 && totals.checkoutRate !== null && totals.checkoutRate < .35) return ['high', '结账偏低'];
-  if (stage.key === 'purchases' && totals.initiateCheckout >= 5 && totals.checkoutCompletionRate !== null && totals.checkoutCompletionRate < .45) return ['high', '支付完成偏低'];
-  if (stage.key === 'purchases' && totals.linkClicks >= 10 && totals.purchases === 0) return ['watch', '暂无购买'];
+  const has = key => Boolean(totals.availableMetrics?.[key]);
+  if (stage.key === 'linkClicks' && has('impressions') && totals.impressions >= 1000 && totals.ctr !== null && totals.ctr < .008) return ['watch', 'CTR 偏低'];
+  if (stage.key === 'landingPageViews' && has('clicks') && has('landingPageViews') && totals.linkClicks >= 10 && totals.lpvRate !== null && totals.lpvRate < .7) return ['watch', 'LPV 偏低'];
+  if (stage.key === 'addToCart' && has('landingPageViews') && has('addToCart') && totals.landingPageViews >= 15 && totals.atcRate !== null && totals.atcRate < .05) return ['high', '加购偏低'];
+  if (stage.key === 'initiateCheckout' && has('addToCart') && has('initiateCheckout') && totals.addToCart >= 5 && totals.checkoutRate !== null && totals.checkoutRate < .35) return ['high', '结账偏低'];
+  if (stage.key === 'purchases' && has('initiateCheckout') && has('purchases') && totals.initiateCheckout >= 5 && totals.checkoutCompletionRate !== null && totals.checkoutCompletionRate < .45) return ['high', '支付完成偏低'];
+  if (stage.key === 'purchases' && has('clicks') && has('purchases') && totals.linkClicks >= 10 && totals.purchases === 0) return ['watch', '暂无购买'];
   return ['normal', '正常'];
 }
 
@@ -182,10 +183,11 @@ export function renderFunnel(targetId, totals, compact = false) {
   const host = byId(targetId);
   if (!host) return;
   const stages = funnelStages(totals);
-  const max = Math.max(...stages.map(stage => stage.value), 1);
+  const max = Math.max(...stages.map(stage => stage.value ?? 0), 1);
   host.innerHTML = stages.map(stage => {
     const [level, status] = funnelStageHealth(stage, totals);
-    return `<article class="commerce-funnel-stage risk-${level}"><div class="commerce-funnel-top"><span>${esc(stage.label)}</span><b>${integer(stage.value)}</b></div><div class="commerce-funnel-track"><i style="width:${Math.max(6, stage.value / max * 100)}%"></i></div><small>${stage.rate === null ? '展示基数' : `上一层转化 ${rate(stage.rate)}`} · <em class="funnel-status ${riskClass(level)}">${esc(status)}</em></small></article>`;
+    const isAvailable = stage.value !== null && stage.value !== undefined;
+    return `<article class="commerce-funnel-stage risk-${level}"><div class="commerce-funnel-top"><span>${esc(stage.label)}</span><b>${integer(stage.value)}</b></div><div class="commerce-funnel-track"><i style="width:${isAvailable ? Math.max(6, stage.value / max * 100) : 0}%"></i></div><small>${!isAvailable ? '暂无数据' : stage.rate === null ? '展示基数' : `上一层转化 ${rate(stage.rate)}`} · <em class="funnel-status ${riskClass(level)}">${esc(isAvailable ? status : '暂无数据')}</em></small></article>`;
   }).join('');
   host.classList.toggle('compact', compact);
 }
@@ -328,19 +330,12 @@ function renderCommerceDetailTable(rows, diagnostics, visibleCount, riskFilter, 
   const columnCount = 34;
   // #b2cRiskTable is the tbody. The one static thead in index.html is intentional.
   table.innerHTML = details.length ? visible.map(row => {
-    const frequency = row.frequency > 0 ? `${Number(row.frequency).toFixed(1)} 次` : '—';
-    const lpvRate = row.clicks ? Number(row.landingPageViews || 0) / Number(row.clicks) : null;
-    const atcRate = row.landingPageViews ? Number(row.addToCart || 0) / Number(row.landingPageViews) : null;
-    const checkoutRate = row.addToCart ? Number(row.initiateCheckout || 0) / Number(row.addToCart) : null;
-    const completionRate = row.initiateCheckout ? Number(row.purchases || 0) / Number(row.initiateCheckout) : null;
-    const purchaseCvr = row.clicks ? Number(row.purchases || 0) / Number(row.clicks) : null;
-    const cpa = row.purchases ? Number(row.spend || 0) / Number(row.purchases) : null;
-    const aov = row.purchases ? Number(row.metaAttributedGmv || 0) / Number(row.purchases) : null;
-    const roas = row.spend ? Number(row.metaAttributedGmv || 0) / Number(row.spend) : null;
+    const metrics = commerceTotals([row]);
+    const frequency = metrics.frequency === null ? '—' : `${Number(metrics.frequency).toFixed(1)} 次`;
     const payload = detailPayloadForRow(row, row.d);
     const layered = buildLayeredRecommendation({ diagnosis: row.d, scope: 'ad', name: row.ad || row.creative || row.campaign, metrics: row });
     const primary = row.d.primaryDiagnosis || derivePrimaryDiagnosis(row.d);
-    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${money(row.spend)}</td><td>${integer(row.impressions)}</td><td>${row.reach ? integer(row.reach) : '—'}</td><td>${frequency}</td><td>${integer(row.clicks)}</td><td>${rate(row.impressions ? Number(row.clicks || 0) / Number(row.impressions) : null)}</td><td>${money(row.clicks ? Number(row.spend || 0) / Number(row.clicks) : null)}</td><td>${money(row.impressions ? Number(row.spend || 0) / Number(row.impressions) * 1000 : null)}</td><td>${integer(row.landingPageViews)}</td><td>${rate(lpvRate)}</td><td>${integer(row.addToCart)}</td><td>${rate(atcRate)}</td><td>${integer(row.initiateCheckout)}</td><td>${rate(checkoutRate)}</td><td>${integer(row.purchases)}</td><td>${rate(completionRate)}</td><td>${rate(purchaseCvr)}</td><td>${money(row.metaAttributedGmv)}</td><td>${money(cpa)}</td><td>${money(aov)}</td><td>${fixed(roas)}</td><td>${esc(primary.label)}</td><td>${esc(layered.recommendedAction)}</td><td>${detailButton(payload)}</td><td>${candidateStatusCell(row, row.d, actions)}</td></tr>`;
+    return `<tr><td>${esc(String(row.dateEnd || row.dateStart || row.date || '—'))}</td><td>${riskBadge(row.d)}</td><td>${esc(row.country || '—')}</td><td>${esc(row.accountName || row.accountId || '—')}</td><td><span class="name" title="${esc(row.campaign || '')}">${esc(titleText(row.campaign || '—', 24))}</span></td><td>${esc(row.adSet || '—')}</td><td>${esc(row.ad || '—')}</td><td>${esc(row.creative || '—')}</td><td>${esc(row.placement || '—')}</td><td>${metrics.availableMetrics.spend ? money(metrics.spend) : '—'}</td><td>${metrics.availableMetrics.impressions ? integer(metrics.impressions) : '—'}</td><td>${metrics.availableMetrics.reach ? integer(metrics.reach) : '—'}</td><td>${frequency}</td><td>${metrics.availableMetrics.clicks ? integer(metrics.linkClicks) : '—'}</td><td>${rate(metrics.ctr)}</td><td>${money(metrics.cpc)}</td><td>${money(metrics.cpm)}</td><td>${metrics.availableMetrics.landingPageViews ? integer(metrics.landingPageViews) : '—'}</td><td>${rate(metrics.lpvRate)}</td><td>${metrics.availableMetrics.addToCart ? integer(metrics.addToCart) : '—'}</td><td>${rate(metrics.atcRate)}</td><td>${metrics.availableMetrics.initiateCheckout ? integer(metrics.initiateCheckout) : '—'}</td><td>${rate(metrics.checkoutRate)}</td><td>${metrics.availableMetrics.purchases ? integer(metrics.purchases) : '—'}</td><td>${rate(metrics.checkoutCompletionRate)}</td><td>${rate(metrics.purchaseCvr)}</td><td>${metrics.availableMetrics.metaAttributedGmv ? money(metrics.metaAttributedGmv) : '—'}</td><td>${money(metrics.cpa)}</td><td>${money(metrics.aov)}</td><td>${fixed(metrics.roas)}</td><td>${esc(primary.label)}</td><td>${esc(layered.recommendedAction)}</td><td>${detailButton(payload)}</td><td>${candidateStatusCell(row, row.d, actions)}</td></tr>`;
   }).join('') : `<tr><td colspan="${columnCount}"><div class="empty">${esc(riskFilter === 'all' ? '当前筛选条件下没有可分析的电商广告数据。' : '当前风险等级下没有广告明细。')}</div></td></tr>`;
   toggle.innerHTML = detailListToggle(details.length, visibleCount);
 }
@@ -356,25 +351,30 @@ export function renderCommerceAnalysisModules({ rows, diagnostics, expandedLists
 export function renderCommerceDashboard({ rows, diagnostics, expandedLists = {}, riskVisibleCount = DISPLAY_LIMIT, riskFilter = 'all', sort = {}, trendMetric = 'spend', actions = {}, rules = {} }) {
   const totals = commerceTotals(rows);
   const hasData = rows.length > 0;
+  const available = totals.availableMetrics;
   const kpis = [
-    metricCard('spend', '广告花费', hasData ? money(totals.spend) : '—', '当前筛选范围 USD', '$'),
-    metricCard('leads', '购买次数', hasData ? integer(totals.purchases) : '—', 'Meta Purchases', '▣'),
-    metricCard('cpl', 'Meta Attributed GMV', hasData ? money(totals.metaAttributedGmv) : '—', 'Meta 归因销售额', '↗'),
-    metricCard('clicks', 'Purchase ROAS', hasData ? fixed(totals.roas) : '—', 'Meta GMV ÷ Spend', '×'),
-    metricCard('cpm', 'CPA / Cost per Purchase', hasData ? money(totals.cpa) : '—', 'Spend ÷ Purchases', '◎'),
-    metricCard('spend', 'AOV / Average Order Value', hasData ? money(totals.aov) : '—', 'Meta GMV ÷ Purchases', '◈'),
-    metricCard('clicks', '覆盖人数', hasData && totals.reach ? integer(totals.reach) : '—', '当前筛选范围覆盖人数', '◉'),
+    metricCard('spend', '广告花费', hasData && available.spend ? money(totals.spend) : '—', '当前筛选范围 USD', '$'),
+    metricCard('leads', '购买次数', hasData && available.purchases ? integer(totals.purchases) : '—', 'Meta Purchases', '▣'),
+    metricCard('cpl', 'Meta Attributed GMV', hasData && available.metaAttributedGmv ? money(totals.metaAttributedGmv) : '—', 'Meta 归因销售额', '↗'),
+    metricCard('clicks', 'Purchase ROAS', hasData && totals.roas !== null ? fixed(totals.roas) : '—', 'Meta GMV ÷ Spend', '×'),
+    metricCard('cpm', 'CPA / Cost per Purchase', hasData && totals.cpa !== null ? money(totals.cpa) : '—', 'Spend ÷ Purchases', '◎'),
+    metricCard('spend', 'AOV / Average Order Value', hasData && totals.aov !== null ? money(totals.aov) : '—', 'Meta GMV ÷ Purchases', '◈'),
+    metricCard('clicks', '覆盖人数', hasData && available.reach ? integer(totals.reach) : '—', '当前筛选范围覆盖人数', '◉'),
     metricCard('cpm', '平均频次', hasData && totals.frequency !== null ? `${totals.frequency.toFixed(1)} 次` : '—', '平均每位用户看到广告次数', '↻'),
-    metricCard('leads', 'Link Clicks', hasData ? integer(totals.linkClicks) : '—', '链接点击量', '↗'),
-    metricCard('clicks', 'Link CTR', hasData ? rate(totals.ctr) : '—', '链接点击 ÷ 展示次数', '%'),
-    metricCard('cpl', 'CPC', hasData ? money(totals.cpc) : '—', '每次链接点击成本', '¢'),
-    metricCard('cpm', 'CPM', hasData ? money(totals.cpm) : '—', '每千次展示花费', '◉')
+    metricCard('leads', 'Link Clicks', hasData && available.clicks ? integer(totals.linkClicks) : '—', '链接点击量', '↗'),
+    metricCard('clicks', 'Link CTR', hasData && totals.ctr !== null ? rate(totals.ctr) : '—', '链接点击 ÷ 展示次数', '%'),
+    metricCard('cpl', 'CPC', hasData && totals.cpc !== null ? money(totals.cpc) : '—', '每次链接点击成本', '¢'),
+    metricCard('cpm', 'CPM', hasData && totals.cpm !== null ? money(totals.cpm) : '—', '每千次展示花费', '◉')
   ];
   byId('b2cMetrics').innerHTML = kpis.join('');
   byId('b2cAdviceMeta').textContent = `当前分析 ${diagnostics.length} 个 Campaign / 国家组合`;
   renderCommerceAdvice(diagnostics, Boolean(expandedLists.advice), rules);
   renderCommerceTrend(rows, trendMetric);
   renderFunnel('b2cFunnelCompact', totals, true);
+  const funnelNote = byId('b2cFunnelCompact')?.parentElement?.querySelector('.commerce-funnel-missing-note');
+  if (funnelNote) funnelNote.remove();
+  const hasFunnelMetric = ['landingPageViews', 'addToCart', 'initiateCheckout', 'purchases'].some(key => available[key]);
+  if (hasData && !hasFunnelMetric) byId('b2cFunnelCompact')?.insertAdjacentHTML('afterend', '<p class="mini-note commerce-funnel-missing-note">当前导入文件未包含 LPV / ATC / Checkout 等漏斗指标。</p>');
   renderCommerceAnalysisModules({ rows, diagnostics, expandedLists, riskVisibleCount, riskFilter, sort, actions });
   const source = byId('b2cDataSummary');
   if (source) source.textContent = hasData ? `已读取 ${rows.length} 条 Meta 广告记录；Meta Purchases 和 Meta Attributed GMV 不等同于店铺真实订单或 Store GMV。` : 'B2C 模式使用与 B2B 相同的 Meta 数据导入、国家、Campaign 和日期筛选条件。';

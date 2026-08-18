@@ -89,6 +89,28 @@ export function extractMetaConversions(source = {}) {
   return result;
 }
 
+
+export function extractMetaConversionAvailability(source = {}) {
+  const raw = { ...(source.sourceRaw || {}), ...(source.sourceRows || {}), ...source };
+  const entries = normalizedEntries(raw);
+  const available = Object.fromEntries(Object.keys(ACTION_KEYS).map(key => [key, false]));
+  Object.entries(DIRECT_KEYS).forEach(([metric, aliases]) => {
+    available[metric] = entries.some(([key, value]) => aliases.includes(key) && value !== null && value !== undefined && String(value).trim() !== '');
+  });
+  entries
+    .filter(([key]) => ['actions', 'actionvalues', 'conversions', 'conversionvalues'].includes(key))
+    .forEach(([key, value]) => {
+      const payload = parsedPayload(value);
+      const items = Array.isArray(payload) ? payload : payload && typeof payload === 'object' ? Object.entries(payload).map(([action_type, item]) => ({ action_type, value: item })) : [];
+      items.forEach(entry => {
+        const metric = keyForAction(entry?.action_type || entry?.type || entry?.name || entry?.key);
+        if (!metric) return;
+        available[key === 'actionvalues' || key === 'conversionvalues' ? (metric === 'purchases' ? 'metaAttributedGmv' : metric) : metric] = true;
+      });
+    });
+  return available;
+}
+
 export const META_COMMERCE_FIELD_HELP = Object.freeze({
   landingPageViews: 'Landing Page Views / landing_page_view',
   addToCart: 'Add to Cart / add_to_cart',

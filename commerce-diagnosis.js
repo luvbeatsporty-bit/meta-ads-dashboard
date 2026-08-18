@@ -1,4 +1,4 @@
-import { DEFAULT_COMMERCE_RULES } from './data-model.js';
+import { DEFAULT_COMMERCE_RULES, isMetricAvailable } from './data-model.js';
 import { commerceGroups, recentCommerceComparison } from './commerce-metrics.js';
 import { frequencySignals } from './metrics.js';
 
@@ -43,13 +43,21 @@ function signal(level, category, rule, advice, options = {}) {
 function below(value, threshold) { return value < threshold - RISK_EPSILON; }
 function stronger(one, two) { return COMMERCE_RISK_ORDER[one.level] < COMMERCE_RISK_ORDER[two.level] ? one : two; }
 
+function metricAvailable(metrics, key) {
+  if (metrics?.availableMetrics && Object.hasOwn(metrics.availableMetrics, key)) return Boolean(metrics.availableMetrics[key]);
+  if (Array.isArray(metrics?.rows)) return metrics.rows.some(row => isMetricAvailable(row, key));
+  return isMetricAvailable(metrics, key);
+}
+
 function hasCompleteDiagnosticData(metrics) {
   return Boolean(
+    metricAvailable(metrics, 'spend') &&
+    metricAvailable(metrics, 'purchases') &&
     metrics.rows?.length &&
     metrics.dayCount >= 2 &&
     metrics.rows.every(row => {
       const date = String(row.dateEnd || row.dateStart || row.date || '').slice(0, 10);
-      return Boolean(date) && Number.isFinite(Number(row.spend)) && Number.isFinite(Number(row.purchases));
+      return Boolean(date) && isMetricAvailable(row, 'spend') && isMetricAvailable(row, 'purchases');
     })
   );
 }
@@ -65,8 +73,12 @@ function stopCandidate(level, category, rule, advice) {
 function commercialSignal(metrics, rules, _stopHits = 0, dayCount = 0) {
   const targetRoas = rules.targetRoas;
   const targetCpa = rules.targetCpa;
-  const noPurchase = metrics.purchases === 0;
-  const hasSample = metrics.spend >= targetCpa;
+  const hasSpend = metricAvailable(metrics, 'spend');
+  const hasPurchases = metricAvailable(metrics, 'purchases');
+  const hasRoas = metrics.roas !== null && metrics.roas !== undefined;
+  const hasCpa = metrics.cpa !== null && metrics.cpa !== undefined;
+  const noPurchase = hasSpend && hasPurchases && metrics.purchases === 0;
+  const hasSample = hasSpend && metrics.spend >= targetCpa;
   const minPurchaseSample = rules.minimumPurchaseSample ?? 3;
   const minimumRuntimeMet = dayCount >= 2 && hasCompleteDiagnosticData({ ...metrics, dayCount });
   const requiredSpend = targetCpa * rules.noPurchaseStopSpendMultiplier;
@@ -76,28 +88,29 @@ function commercialSignal(metrics, rules, _stopHits = 0, dayCount = 0) {
   if (noPurchase && metrics.spend >= requiredSpend && minimumRuntimeMet) {
     return stopCandidate('extreme', 'noPurchase', `花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、Purchase = 0，且已满足最低运行期`, `当前广告花费已经达到目标 CPA 的 ${rules.noPurchaseStopSpendMultiplier} 倍，但仍未产生任何购买，继续投放存在明显预算浪费风险。建议人工确认后暂停该广告。`);
   }
-  if (metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && metrics.roas !== null && below(metrics.roas, targetRoas * rules.lowRoasStopRatio) && minimumRuntimeMet) {
+  if (hasSpend && hasPurchases && metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && hasRoas && below(metrics.roas, targetRoas * rules.lowRoasStopRatio) && minimumRuntimeMet) {
     return stopCandidate('extreme', 'roas', `Purchases ≥ ${minPurchaseSample}、花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、ROAS < 目标 ROAS × ${rules.lowRoasStopRatio}`, '当前广告已经产生一定购买样本，但 ROAS 长时间明显低于目标值，继续投放可能持续亏损。建议人工复核后考虑暂停。');
   }
-  if (metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && metrics.cpa !== null && metrics.cpa >= targetCpa * rules.highCpaStopMultiplier && minimumRuntimeMet) {
+  if (hasSpend && hasPurchases && metrics.purchases >= minPurchaseSample && metrics.spend >= requiredSpend && hasCpa && metrics.cpa >= targetCpa * rules.highCpaStopMultiplier && minimumRuntimeMet) {
     return stopCandidate('extreme', 'cpa', `Purchases ≥ ${minPurchaseSample}、花费 ≥ 目标 CPA × ${rules.noPurchaseStopSpendMultiplier}、CPA ≥ 目标 CPA × ${rules.highCpaStopMultiplier}`, `当前广告单次购买成本已达到目标 CPA 的 ${rules.highCpaStopMultiplier} 倍或以上，且已有足够购买样本，建议人工检查后考虑暂停或降低预算。`);
   }
   if (noPurchase && metrics.spend >= targetCpa * rules.noPurchaseHighSpendMultiplier) return signal('high', 'noPurchase', `花费 ≥ 目标 CPA × ${rules.noPurchaseHighSpendMultiplier} 且 Purchase = 0`, '当前广告花费已达到目标购买成本的两倍，但仍没有产生购买。建议优先检查素材点击质量、产品页、价格、加购和支付流程。');
-  if (metrics.cpa !== null && metrics.cpa > targetCpa * rules.cpaHighRiskMultiplier) return signal('high', 'cpa', `CPA > 目标 CPA × ${rules.cpaHighRiskMultiplier}`, '当前单次购买成本已经明显高于目标 CPA，请检查 CTR、落地页、加购、结账和最终购买环节，定位成本上涨发生在哪一层。');
-  if (metrics.roas !== null && hasSample && below(metrics.roas, targetRoas * rules.roasHighRiskRatio)) return signal('high', 'roas', `ROAS < 目标 ROAS × ${rules.roasHighRiskRatio}`, '当前广告回报明显低于目标，需要重点检查 CPA、购买转化漏斗、商品页面和素材表现。');
-  if (metrics.roas !== null && below(metrics.roas, targetRoas * rules.roasWatchRatio)) return signal('high', 'roas', `ROAS 低于目标 ROAS × ${rules.roasWatchRatio}`, '当前 ROAS 明显低于目标，建议检查购买成本、产品页转化和素材表现，并考虑降低预算或调整广告。');
-  if (metrics.cpa !== null && metrics.cpa > targetCpa * rules.cpaWatchMultiplier) return signal('watch', 'cpa', `CPA > 目标 CPA × ${rules.cpaWatchMultiplier}`, '当前单次购买成本开始高于目标，建议继续观察购买转化率、素材和落地页表现。');
-  if (metrics.roas !== null && below(metrics.roas, targetRoas)) return signal('watch', 'roas', 'ROAS 略低于目标 ROAS', '当前 ROAS 略低于目标值，暂时不建议大幅调整。请继续观察 CPA、购买转化率和素材表现。');
-  if (metrics.roas !== null && metrics.roas >= targetRoas) return signal('excellent', 'roas', 'ROAS 已达到或超过目标', '当前广告 ROAS 已达到或超过目标水平，整体盈利效率表现良好。可继续观察，并根据稳定性考虑逐步扩量。');
+  if (hasCpa && metrics.cpa > targetCpa * rules.cpaHighRiskMultiplier) return signal('high', 'cpa', `CPA > 目标 CPA × ${rules.cpaHighRiskMultiplier}`, '当前单次购买成本已经明显高于目标 CPA，请检查 CTR、落地页、加购、结账和最终购买环节，定位成本上涨发生在哪一层。');
+  if (hasRoas && hasSample && below(metrics.roas, targetRoas * rules.roasHighRiskRatio)) return signal('high', 'roas', `ROAS < 目标 ROAS × ${rules.roasHighRiskRatio}`, '当前广告回报明显低于目标，需要重点检查 CPA、购买转化漏斗、商品页面和素材表现。');
+  if (hasRoas && below(metrics.roas, targetRoas * rules.roasWatchRatio)) return signal('high', 'roas', `ROAS 低于目标 ROAS × ${rules.roasWatchRatio}`, '当前 ROAS 明显低于目标，建议检查购买成本、产品页转化和素材表现，并考虑降低预算或调整广告。');
+  if (hasCpa && metrics.cpa > targetCpa * rules.cpaWatchMultiplier) return signal('watch', 'cpa', `CPA > 目标 CPA × ${rules.cpaWatchMultiplier}`, '当前单次购买成本开始高于目标，建议继续观察购买转化率、素材和落地页表现。');
+  if (hasRoas && below(metrics.roas, targetRoas)) return signal('watch', 'roas', 'ROAS 略低于目标 ROAS', '当前 ROAS 略低于目标值，暂时不建议大幅调整。请继续观察 CPA、购买转化率和素材表现。');
+  if (hasRoas && metrics.roas >= targetRoas) return signal('excellent', 'roas', 'ROAS 已达到或超过目标', '当前广告 ROAS 已达到或超过目标水平，整体盈利效率表现良好。可继续观察，并根据稳定性考虑逐步扩量。');
   return signal('normal', 'normal', '等待更多购买样本', '当前购买样本不足，请继续观察广告花费、购买和转化漏斗变化。');
 }
 
 function funnelSignal(metrics, ctrThreshold) {
-  if (metrics.impressions >= 1000 && metrics.ctr !== null && metrics.ctr < ctrThreshold) return signal('watch', 'creative', `链接 CTR < ${(ctrThreshold * 100).toFixed(1)}%`, '当前广告点击率偏低，用户看到广告后没有产生足够兴趣。建议测试新的 Creative、封面、Hook、标题、视频前三秒或广告文案。');
-  if (metrics.linkClicks >= 10 && metrics.lpvRate !== null && metrics.lpvRate < 0.7) return signal('watch', 'landingPage', 'LPV Rate < 70%', '广告点击表现正常，但 Landing Page View 比例偏低。建议检查网站加载速度、移动端页面、跳转链接和页面稳定性。');
-  if (metrics.landingPageViews >= 15 && metrics.atcRate !== null && metrics.atcRate < 0.05) return signal('watch', 'productPage', 'ATC Rate < 5%', '用户已经正常进入商品页面，但加购率偏低。当前问题更可能出现在商品吸引力、价格、产品图片、产品介绍、优惠或信任感，而不是广告点击层面。');
-  if (metrics.addToCart >= 5 && metrics.checkoutRate !== null && metrics.checkoutRate < 0.35) return signal('watch', 'cart', 'Checkout Rate < 35%', '用户有明显购买兴趣并完成加购，但进入结账流程的比例偏低。建议检查购物车页面、运费展示、优惠政策、库存、尺码和额外费用。');
-  if (metrics.initiateCheckout >= 5 && metrics.checkoutCompletionRate !== null && metrics.checkoutCompletionRate < 0.45) return signal('watch', 'checkout', 'Checkout Completion Rate < 45%', '用户已经进入结账流程，但最终购买完成率偏低。建议重点检查支付方式、支付失败、运费、税费、结账页面体验以及支付信任问题。');
+  const has = key => metricAvailable(metrics, key);
+  if (has('impressions') && metrics.impressions >= 1000 && metrics.ctr !== null && metrics.ctr < ctrThreshold) return signal('watch', 'creative', `链接 CTR < ${(ctrThreshold * 100).toFixed(1)}%`, '当前广告点击率偏低，用户看到广告后没有产生足够兴趣。建议测试新的 Creative、封面、Hook、标题、视频前三秒或广告文案。');
+  if (has('clicks') && has('landingPageViews') && metrics.linkClicks >= 10 && metrics.lpvRate !== null && metrics.lpvRate < 0.7) return signal('watch', 'landingPage', 'LPV Rate < 70%', '广告点击表现正常，但 Landing Page View 比例偏低。建议检查网站加载速度、移动端页面、跳转链接和页面稳定性。');
+  if (has('landingPageViews') && has('addToCart') && metrics.landingPageViews >= 15 && metrics.atcRate !== null && metrics.atcRate < 0.05) return signal('watch', 'productPage', 'ATC Rate < 5%', '用户已经正常进入商品页面，但加购率偏低。当前问题更可能出现在商品吸引力、价格、产品图片、产品介绍、优惠或信任感，而不是广告点击层面。');
+  if (has('addToCart') && has('initiateCheckout') && metrics.addToCart >= 5 && metrics.checkoutRate !== null && metrics.checkoutRate < 0.35) return signal('watch', 'cart', 'Checkout Rate < 35%', '用户有明显购买兴趣并完成加购，但进入结账流程的比例偏低。建议检查购物车页面、运费展示、优惠政策、库存、尺码和额外费用。');
+  if (has('initiateCheckout') && has('purchases') && metrics.initiateCheckout >= 5 && metrics.checkoutCompletionRate !== null && metrics.checkoutCompletionRate < 0.45) return signal('watch', 'checkout', 'Checkout Completion Rate < 45%', '用户已经进入结账流程，但最终购买完成率偏低。建议重点检查支付方式、支付失败、运费、税费、结账页面体验以及支付信任问题。');
   return null;
 }
 

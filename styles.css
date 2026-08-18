@@ -290,7 +290,7 @@ footer { padding: 8px 34px 28px; color: #929caf; font-size: 11px; text-align: ce
   body.nav-open { overflow: hidden; } body.nav-open::after { position: fixed; z-index: 9; inset: 0; background: rgba(18, 28, 48, .28); content: ""; }
   .sidebar { width: 245px; box-shadow: 18px 0 40px rgba(20, 32, 56, .15); transform: translateX(-105%); transition: transform .22s ease; }.nav-open .sidebar { transform: translateX(0); }
   .main-shell { width: 100%; margin-left: 0; }.main-header { min-height: 59px; padding: 0 16px; }.view { padding: 24px 16px 30px; }.overview-heading { flex-direction: column; margin-bottom: 21px; }.overview-heading h1 { font-size: 27px; }.header-tools { justify-content: flex-start; padding-top: 0; }
-  .import-grid, .lead-import-grid { gap: 12px; }.upload-card, .country-guide { min-height: auto; padding: 19px; }.upload-card { align-items: flex-start; }.upload-icon { flex-basis: 44px; width: 44px; height: 44px; }.country-guide ol { grid-template-columns: 1fr; }
+  .import-grid, .lead-import-grid { gap: 12px; }.upload-card, .country-guide { min-height: auto; padding: 19px; }.upload-card { align-items: flex-start; }.upload-icon { flex-basis: 44px; width: 44px; height: 44px; }.country-guide ol, .guide-field-groups { grid-template-columns: 1fr; }
   .filter-bar { grid-template-columns: 1fr; padding: 13px; }.reset-button { width: 100%; }.metrics, .lead-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }.metric { min-height: 150px; padding: 14px; }.metric strong { font-size: 21px; }.metric svg { right: 9px; bottom: 7px; left: 9px; width: calc(100% - 18px); }
   .panel { padding: 16px; }.canvas-wrap { height: 245px; }.panel-head, .section-head { flex-direction: column; }.section-actions { justify-content: flex-start; }.quality-grid, .settings-grid, .rules-grid, .mapping-fields { grid-template-columns: 1fr; }.header-status { font-size: 11px; }.sidebar-note { display: none; }
 }
@@ -596,7 +596,8 @@ body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
 .business-mode-switch > span { padding:0 7px; color:#8894aa; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
 .business-mode-switch button { min-height:29px; padding:0 10px; color:#65718a; border:0; border-radius:8px; background:transparent; font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
 .business-mode-switch button.active { color:#fff; background:#506ceb; box-shadow:0 3px 9px rgba(80,108,235,.22); }
-.b2c-import-grid { grid-template-columns:minmax(320px,1fr); margin-bottom:18px; }
+.b2c-import-grid { margin-bottom:18px; }
+.guide-fields { margin-top:16px; }.guide-fields h3 { margin:0 0 9px; color:#33435f; font-size:13px; }.guide-field-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.guide-field-groups > div { padding:10px 11px; border:1px solid #ecf0fa; border-radius:10px; background:#f8faff; }.guide-field-groups strong { color:#263652; font-size:12px; }.guide-field-groups p { margin:4px 0 0; color:#61708a; font-size:12px; line-height:1.6; }
 .commerce-funnel-panel { margin-top:20px; }
 .commerce-funnel-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; padding-top:5px; }
 .commerce-funnel-stage { min-width:0; padding:14px; border:1px solid #e8edf6; border-radius:13px; background:#fbfcff; }

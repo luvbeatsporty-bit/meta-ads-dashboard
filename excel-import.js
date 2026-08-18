@@ -1,4 +1,6 @@
-import { AD_ALIASES, createAdRecord, findAliasKey, toDate, toNumber } from './data-model.js';
+import { AD_METRIC_KEYS, createAdRecord, toDate, toOptionalNumber } from './data-model.js';
+import { applyMappingOverrides, buildHeaderMapping, confirmedMetricKeys } from './field-mapper.js';
+import { extractMetaConversionAvailability, extractMetaConversions } from './commerce-mapping.js';
 
 export function parseCsvText(text) {
   const rows = [];
@@ -84,7 +86,8 @@ function entryText(entries, path) {
 }
 
 function normalizeZipPath(target = '') {
-  const chunks = ['xl', ...String(target).replace(/^\//, '').split('/')];
+  const raw = String(target).replace(/^\/+/, '');
+  const chunks = [raw.startsWith('xl/') ? raw : `xl/${raw}`].join('/').split('/');
   const normalized = [];
   chunks.forEach(chunk => {
     if (!chunk || chunk === '.') return;
@@ -139,27 +142,32 @@ async function readNativeXlsx(file) {
   return sheets;
 }
 
-function legacyWorkbookSheets(file) {
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onload = event => {
-      try {
-        if (!window.XLSX) { resolve([]); return; }
-        const workbook = XLSX.read(event.target.result, { type: 'array' });
-        resolve(workbook.SheetNames.map(name => ({ name, rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: true }) })));
-      } catch { resolve([]); }
-    };
-    reader.onerror = () => resolve([]);
-    reader.readAsArrayBuffer(file);
-  });
+async function readSheetJsWorkbook(file) {
+  if (!globalThis.XLSX) throw new Error('Excel 解析组件未加载，请刷新页面后重试。');
+  try {
+    const workbook = globalThis.XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+    if (!workbook.SheetNames?.length) throw new Error('Excel Sheet 为空。');
+    return workbook.SheetNames.map(name => ({
+      name,
+      rows: globalThis.XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: true })
+    }));
+  } catch (error) {
+    if (error?.message?.includes('为空')) throw error;
+    throw new Error('Excel 文件无法解析，请确认文件未损坏。');
+  }
 }
 
 export async function readWorkbookSheets(file) {
-  if (/\.csv$/i.test(file.name)) return [{ name: 'CSV', rows: parseCsvText(String(await file.text()).replace(/^\uFEFF/, '')) }];
-  if (/\.xlsx$/i.test(file.name)) {
-    try { return await readNativeXlsx(file); } catch { return legacyWorkbookSheets(file); }
+  if (/\.csv$/i.test(file.name)) {
+    const text = String(await file.text()).replace(/^\uFEFF/, '');
+    if (!text.trim()) throw new Error('文件为空。');
+    return [{ name: 'CSV', rows: parseCsvText(text) }];
   }
-  return legacyWorkbookSheets(file);
+  if (/\.xlsx$/i.test(file.name)) {
+    try { return await readNativeXlsx(file); } catch { return readSheetJsWorkbook(file); }
+  }
+  if (/\.xls$/i.test(file.name)) return readSheetJsWorkbook(file);
+  throw new Error('不支持的文件格式。');
 }
 
 export async function readSpreadsheetRows(file) {
@@ -167,45 +175,93 @@ export async function readSpreadsheetRows(file) {
   return sheets[0]?.rows || [];
 }
 
-function findHeader(rows) {
-  for (let rowIndex = 0; rowIndex < Math.min(rows.length, 15); rowIndex += 1) {
-    const found = rows[rowIndex].filter(value => findAliasKey(value, AD_ALIASES)).length;
-    if (found >= 2) return rowIndex;
+function analyseSheet(rows = [], fileName = '', sheetName = '', options = {}) {
+  let best = null;
+  const limit = Math.min(rows.length, 15);
+  for (let rowIndex = 0; rowIndex < limit; rowIndex += 1) {
+    const headers = rows[rowIndex] || [];
+    if (!headers.some(value => String(value ?? '').trim())) continue;
+    const sampleRows = rows.slice(rowIndex + 1, rowIndex + 21);
+    const mapping = buildHeaderMapping(headers, { sampleRows, sheetId: `${fileName}::${sheetName}::${rowIndex}`, customMappings: options.customMappings || {} });
+    const score = mapping.filter(item => item.status !== 'unused').length;
+    if (!best || score > best.score) best = { headerIndex: rowIndex, headers, mapping, score };
   }
-  return -1;
+  return best?.score ? best : { headerIndex: -1, headers: [], mapping: [], score: 0 };
 }
 
-function parseAdRows(rows, fileName = '', sheetName = '') {
+function planForRows(rows, fileName, sheetName, mapping, options = {}) {
+  if (mapping?.length) {
+    const headerIndex = mapping[0]?.headerIndex;
+    return { headerIndex: Number.isInteger(headerIndex) ? headerIndex : analyseSheet(rows, fileName, sheetName, options).headerIndex, mapping };
+  }
+  const analysis = analyseSheet(rows, fileName, sheetName, options);
+  return { headerIndex: analysis.headerIndex, mapping: analysis.mapping };
+}
+
+export function previewAdRows(rows, fileName = '', sheetName = '', options = {}) {
+  const analysis = analyseSheet(rows, fileName, sheetName, options);
+  const mapping = analysis.mapping.map(item => ({ ...item, headerIndex: analysis.headerIndex }));
+  return {
+    fileName, sheetName, rows, headerIndex: analysis.headerIndex, headers: analysis.headers,
+    mapping, recognisedColumns: mapping.filter(item => item.status !== 'unused').length,
+    confirmedColumns: confirmedMetricKeys(mapping).length
+  };
+}
+
+export function parseAdRows(rows, fileName = '', sheetName = '', options = {}) {
   const all = [];
-  const headerIndex = findHeader(rows);
+  const fallback = previewAdRows(rows, fileName, sheetName, { customMappings: options.customMappings || {} });
+  const headerIndex = options.mapping?.[0]?.headerIndex ?? fallback.headerIndex;
   if (headerIndex < 0) return all;
+  const mapping = applyMappingOverrides(options.mapping || fallback.mapping, options.overrides || {});
   const map = {};
-  rows[headerIndex].forEach((value, index) => {
-    const key = findAliasKey(value, AD_ALIASES);
-    if (key && map[key] === undefined) map[key] = index;
+  mapping.forEach(item => {
+    if (item.status === 'confirmed' && item.internalKey && map[item.internalKey] === undefined) map[item.internalKey] = item.index;
   });
-  if (map.spend === undefined && map.results === undefined) return all;
+  if (!Object.keys(map).length) return all;
+  const mappedKeys = Object.keys(map);
+  const get = (row, key) => map[key] === undefined ? null : row[map[key]];
+  const hasValue = value => value !== null && value !== undefined && String(value).trim() !== '';
+  const numeric = (row, key) => toOptionalNumber(get(row, key));
+
   for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
+    const row = rows[rowIndex] || [];
     if (!row.some(value => String(value ?? '').trim())) continue;
-    const get = key => map[key] === undefined ? '' : row[map[key]];
-    const country = String(get('country') || '未分类').trim();
-    const campaign = String(get('campaign') || '未命名广告系列').trim();
+    if (!mappedKeys.some(key => hasValue(get(row, key)))) continue;
+    const country = String(get(row, 'country') ?? '未分类').trim() || '未分类';
+    const campaign = String(get(row, 'campaign') ?? '未命名广告系列').trim() || '未命名广告系列';
     if (/^(total|合计|总计|汇总)$/i.test(country) || /^(total|合计|总计|汇总)$/i.test(campaign)) continue;
-    const ad = createAdRecord({
-      date: toDate(get('date') || get('dateStart')),
-      platform: String(get('platform') || 'Meta').trim(), country, product: String(get('product')).trim(),
-      accountId: String(get('accountId')).trim(), accountName: String(get('accountName')).trim(), campaignId: String(get('campaignId')).trim(), campaign,
-      adSetId: String(get('adSetId')).trim(), adSet: String(get('adSet')).trim(), adId: String(get('adId')).trim(), ad: String(get('ad')).trim(),
-      creative: String(get('creative')).trim(), creativeType: String(get('creativeType')).trim(), audienceType: String(get('audienceType')).trim(), status: String(get('status')).trim(),
-      startTime: toDate(get('startTime')), budget: toNumber(get('budget')), currency: String(get('currency') || 'USD').trim(), timezone: String(get('timezone')).trim(),
-      spend: toNumber(get('spend')), impressions: toNumber(get('impressions')), reach: toNumber(get('reach')), frequency: toNumber(get('frequency')), allClicks: toNumber(get('allClicks')), clicks: toNumber(get('clicks')),
-      ctr: toNumber(get('ctr')) / (String(get('ctr')).includes('%') ? 100 : 1), allCtr: toNumber(get('allCtr')) / (String(get('allCtr')).includes('%') ? 100 : 1), cpc: toNumber(get('cpc')), cpm: toNumber(get('cpm')),
-      landingPageViews: toNumber(get('landingPageViews')), formOpens: toNumber(get('formOpens')), formSubmits: toNumber(get('formSubmits')), results: toNumber(get('results')), costPerResult: toNumber(get('costPerResult')),
-      dateStart: toDate(get('dateStart') || get('date')), dateEnd: toDate(get('dateEnd') || get('date')), sourceFile: fileName, sourceSheet: sheetName,
-      sourceRows: Object.fromEntries(Object.entries(map).map(([key, index]) => [key, row[index]]))
+    const sourceRaw = Object.fromEntries(rows[headerIndex].map((header, index) => [String(header || '').trim(), row[index]]).filter(([key]) => key));
+    const sourceRows = Object.fromEntries(mappedKeys.map(key => [key, get(row, key)]));
+    const conversions = extractMetaConversions({
+      landingPageViews: get(row, 'landingPageViews'), addToCart: get(row, 'addToCart'), initiateCheckout: get(row, 'initiateCheckout'),
+      purchases: get(row, 'purchases'), metaAttributedGmv: get(row, 'metaAttributedGmv'), sourceRows, sourceRaw
     });
-    if (ad.spend || ad.results || ad.impressions || ad.clicks) all.push(ad);
+    const conversionAvailable = extractMetaConversionAvailability({ sourceRows, sourceRaw });
+    const availableMetrics = Object.fromEntries(AD_METRIC_KEYS.map(key => [
+      key,
+      (map[key] !== undefined && hasValue(get(row, key))) || Boolean(conversionAvailable[key])
+    ]));
+    const conversionValues = Object.fromEntries(Object.keys(conversions).map(key => [key, conversionAvailable[key] ? conversions[key] : null]));
+    const percent = key => { const value = numeric(row, key); return value === null ? null : value / (String(get(row, key)).includes('%') ? 100 : 1); };
+    const ad = createAdRecord({
+      date: toDate(get(row, 'date') || get(row, 'dateStart')),
+      platform: String(get(row, 'platform') || 'Meta').trim(), country, region: String(get(row, 'region') || '').trim(), product: String(get(row, 'product') || '').trim(),
+      accountId: String(get(row, 'accountId') || '').trim(), accountName: String(get(row, 'accountName') || '').trim(), campaignId: String(get(row, 'campaignId') || '').trim(), campaign,
+      adSetId: String(get(row, 'adSetId') || '').trim(), adSet: String(get(row, 'adSet') || '').trim(), adId: String(get(row, 'adId') || '').trim(), ad: String(get(row, 'ad') || '').trim(),
+      creative: String(get(row, 'creative') || '').trim(), creativeType: String(get(row, 'creativeType') || '').trim(), audienceType: String(get(row, 'audienceType') || '').trim(), placement: String(get(row, 'placement') || '').trim(), status: String(get(row, 'status') || '').trim(),
+      startTime: toDate(get(row, 'startTime')), budget: numeric(row, 'budget'), currency: String(get(row, 'currency') || 'USD').trim(), timezone: String(get(row, 'timezone') || '').trim(),
+      spend: numeric(row, 'spend'), impressions: numeric(row, 'impressions'), reach: numeric(row, 'reach'), frequency: numeric(row, 'frequency'), allClicks: numeric(row, 'allClicks'), clicks: numeric(row, 'clicks'),
+      ctr: percent('ctr'), allCtr: percent('allCtr'), cpc: numeric(row, 'cpc'), cpm: numeric(row, 'cpm'),
+      lpvRate: percent('lpvRate'), atcRate: percent('atcRate'), checkoutRate: percent('checkoutRate'), checkoutCompletionRate: percent('checkoutCompletionRate'), purchaseCvr: percent('purchaseCvr'),
+      ...conversionValues, roas: numeric(row, 'roas'), cpa: numeric(row, 'cpa'), aov: numeric(row, 'aov'),
+      formOpens: numeric(row, 'formOpens'), formSubmits: numeric(row, 'formSubmits'), results: numeric(row, 'results'), costPerResult: numeric(row, 'costPerResult'),
+      leadConversionRate: percent('leadConversionRate'), validLeads: numeric(row, 'validLeads'), invalidLeads: numeric(row, 'invalidLeads'), validLeadRate: percent('validLeadRate'), validLeadCpl: numeric(row, 'validLeadCpl'),
+      contactedLeads: numeric(row, 'contactedLeads'), opportunities: numeric(row, 'opportunities'), quotes: numeric(row, 'quotes'), deals: numeric(row, 'deals'),
+      dateStart: toDate(get(row, 'dateStart') || get(row, 'date')), dateEnd: toDate(get(row, 'dateEnd') || get(row, 'date')), sourceFile: fileName, sourceSheet: sheetName,
+      availableMetrics, sourceRows, sourceRaw
+    });
+    all.push(ad);
   }
   return all;
 }
@@ -219,10 +275,26 @@ export function parseAdWorkbook(workbook, fileName = '') {
   return all;
 }
 
-export async function importAdFiles(files) {
+export async function previewAdFiles(files, options = {}) {
   const parsed = await Promise.all([...files].map(async file => {
     const sheets = await readWorkbookSheets(file);
-    return sheets.flatMap(sheet => parseAdRows(sheet.rows, file.name, sheet.name));
+    return sheets.map(sheet => previewAdRows(sheet.rows, file.name, sheet.name, { customMappings: options.customMappings || {} }));
   }));
-  return parsed.flat();
+  const sheets = parsed.flat();
+  return {
+    sheets,
+    recognisedColumns: sheets.reduce((total, sheet) => total + sheet.recognisedColumns, 0),
+    confirmedColumns: sheets.reduce((total, sheet) => total + sheet.confirmedColumns, 0)
+  };
+}
+
+export function parseAdImportPreview(preview, overrides = {}, options = {}) {
+  return (preview?.sheets || []).flatMap(sheet => parseAdRows(sheet.rows, sheet.fileName, sheet.sheetName, {
+    mapping: sheet.mapping, overrides, customMappings: options.customMappings || {}
+  }));
+}
+
+export async function importAdFiles(files, options = {}) {
+  const preview = await previewAdFiles(files, { customMappings: options.customMappings || {} });
+  return parseAdImportPreview(preview, options.overrides || {}, { customMappings: options.customMappings || {} });
 }

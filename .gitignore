@@ -24,3 +24,10 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Local-only visual/vendor artifacts (kept on this Mac, never commit)
+/.vendor/
+# Browser-side Excel parser required for .xls/.xlsx uploads
+!vendor/
+!vendor/xlsx.full.min.js
+/8月10日_5MB以内.gif

@@ -144,7 +144,7 @@ button { border: 0; cursor: pointer; }
 .upload-icon svg { width: 25px; height: 25px; }
 .upload-card h2, .country-guide h2 { margin: 4px 0 7px; font-size: 16px; letter-spacing: -.3px; }
 .upload-card p { max-width: 440px; margin: 0; color: #748098; font-size: 12px; line-height: 1.65; }
-.upload-button { display: inline-flex; min-height: 30px; align-items: center; margin-top: 13px; padding: 0 10px; color: #4664ec; background: #f0f3ff; border-radius: 7px; font-size: 11px; font-weight: 800; }
+.upload-button { display: inline-flex; min-height: 30px; align-items: center; margin-top: 13px; padding: 0 10px; border: 0; color: #4664ec; background: #f0f3ff; border-radius: 7px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
 .country-guide { min-height: 181px; padding: 21px 24px 17px; background: linear-gradient(135deg, #fff 0%, #f9fbff 100%); }
 .guide-title { display: flex; align-items: flex-start; gap: 10px; }
 .guide-icon { display: grid; flex: 0 0 35px; width: 35px; height: 35px; place-items: center; color: #188dcb; background: #eaf7ff; border-radius: 11px; font-size: 21px; }
@@ -162,6 +162,9 @@ button { border: 0; cursor: pointer; }
 input, select { width: 100%; height: 35px; padding: 0 10px; color: #374661; background: #fff; border: 1px solid #e2e8f1; border-radius: 8px; outline: none; font-size: 12px; transition: border-color .18s ease, box-shadow .18s ease; }
 input:focus, select:focus { border-color: #9aaaff; box-shadow: 0 0 0 3px #eef0ff; }
 input[readonly] { color: #758198; background: #f8fafc; cursor: default; }
+.date-range-trigger[readonly]:not(:disabled) { cursor: pointer; }
+.date-range-trigger[readonly]:not(:disabled):hover { border-color: #c4cdf7; }
+.date-range-trigger:disabled { color: #9aa5b6; cursor: not-allowed; }
 .reset-button { margin-bottom: 0; white-space: nowrap; }
 
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap: 14px; margin-bottom: 20px; }
@@ -254,6 +257,13 @@ input[readonly] { color: #758198; background: #f8fafc; cursor: default; }
 .settings-grid input, .settings-grid select, .mapping-fields select { margin-top: 7px; }
 .rules-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
+.date-range-modal { width: min(570px, calc(100vw - 36px)); }
+.date-range-quick-wrap { margin-top: 18px; }
+.control-label { display: block; margin-bottom: 8px; color: #60708a; font-size: 12px; font-weight: 700; }
+.date-range-quick-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.date-range-quick { padding: 8px 11px; }
+.date-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.date-range-error { min-height: 18px; margin: 10px 0 0; color: #c44c5a; font-size: 11px; line-height: 1.5; }
 
 .modal { position: fixed; z-index: 30; inset: 0; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(22, 35, 62, .38); backdrop-filter: blur(3px); }
 .modal.open { display: flex; }
@@ -573,4 +583,100 @@ footer { padding: 8px 34px 28px; color: #929caf; font-size: 11px; text-align: ce
   .bar-row { grid-template-columns: minmax(70px, .9fr) minmax(48px, 1.1fr) max-content; }
   .detail-chart-grid { padding: 10px; }
   .chart-toggle { flex: 1; }
+}
+
+/* B2C commerce mode: extension of the existing dashboard language. */
+.b2c-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2c-only { display: flex; }
+body[data-business-mode="b2c-commerce"] .b2b-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2b-rules-only { display: none; }
+.b2c-rules-only { display: none; }
+body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
+.business-mode-switch { display:flex; align-items:center; gap:4px; margin-left:18px; padding:4px; border:1px solid #e3e9f4; border-radius:11px; background:#f6f8fc; }
+.business-mode-switch > span { padding:0 7px; color:#8894aa; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+.business-mode-switch button { min-height:29px; padding:0 10px; color:#65718a; border:0; border-radius:8px; background:transparent; font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+.business-mode-switch button.active { color:#fff; background:#506ceb; box-shadow:0 3px 9px rgba(80,108,235,.22); }
+.b2c-import-grid { grid-template-columns:minmax(320px,1fr); margin-bottom:18px; }
+.commerce-funnel-panel { margin-top:20px; }
+.commerce-funnel-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; padding-top:5px; }
+.commerce-funnel-stage { min-width:0; padding:14px; border:1px solid #e8edf6; border-radius:13px; background:#fbfcff; }
+.commerce-funnel-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; color:#6e7a91; font-size:11px; font-weight:700; }
+.commerce-funnel-top span { line-height:1.35; }.commerce-funnel-top b { color:#33415b; font-size:16px; white-space:nowrap; }
+.commerce-funnel-track { height:7px; overflow:hidden; margin:12px 0 8px; border-radius:99px; background:#eaf0fb; }.commerce-funnel-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#506ceb,#49bea8); }.commerce-funnel-stage:nth-child(2) i{background:linear-gradient(90deg,#5d7df4,#6a6be6)}.commerce-funnel-stage:nth-child(3) i{background:linear-gradient(90deg,#6b63d8,#9a63d8)}.commerce-funnel-stage:nth-child(4) i{background:linear-gradient(90deg,#7b68d8,#c775b1)}.commerce-funnel-stage:nth-child(5) i{background:linear-gradient(90deg,#bb70ac,#e09b68)}.commerce-funnel-stage:nth-child(6) i{background:linear-gradient(90deg,#e09b68,#50b596)}
+.commerce-funnel-stage small { color:#9aa5b7; font-size:10px; }.commerce-data-note { margin:12px 3px 0; }.b2c-data-table { min-width:3100px; }.b2c-data-table td small { display:block; margin-top:3px; color:#97a2b6; font-size:10px; }
+.funnel-summary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }.funnel-summary-grid>div { display:grid; gap:5px; padding:16px; border:1px solid #e7ecf5; border-radius:14px; background:#fbfcff; }.funnel-summary-grid small,.funnel-summary-grid span{color:#8894aa;font-size:11px;line-height:1.5}.funnel-summary-grid b{color:#33415b;font-size:21px}.funnel-summary-grid b.watch{color:#ad7b1f}.funnel-summary-grid b.high,.funnel-summary-grid b.extreme{color:#c25452}.funnel-summary-grid b.excellent{color:#169477}
+@media(max-width:980px){.commerce-funnel-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.business-mode-switch>span{display:none}}@media(max-width:680px){.business-mode-switch{order:3;width:100%;margin:6px 0 0}.main-header{flex-wrap:wrap}.commerce-funnel-grid,.funnel-summary-grid{grid-template-columns:1fr}.business-mode-switch button{flex:1}.b2c-only{display:none!important}body[data-business-mode="b2c-commerce"] .b2c-only{display:flex!important}}
+
+/* B2C analysis modules reuse panel, table and list-toggle primitives from B2B. */
+.commerce-trend-panel, .commerce-risk-panel, .commerce-analysis-card { margin-top: 20px; }
+.commerce-segmented { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; background: #f4f6fb; border: 1px solid #e8edf5; border-radius: 9px; }
+.commerce-segmented button { padding: 5px 8px; color: #78859a; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font: inherit; font-size: 10px; font-weight: 750; line-height: 1.1; transition: color .16s ease, background .16s ease, box-shadow .16s ease; }
+.commerce-segmented button:hover, .commerce-segmented button:focus-visible { color: #5669dd; outline: none; }
+.commerce-segmented button.active { color: #4659cc; background: #fff; box-shadow: 0 1px 4px rgba(56, 69, 116, .1); }
+.commerce-trend-chart { min-height: 242px; padding: 3px 0 0; }
+.commerce-trend-svg { display: block; width: 100%; height: 238px; overflow: visible; }
+.commerce-trend-grid line { stroke: #e9edf5; stroke-width: 1; }
+.commerce-trend-grid text, .commerce-trend-labels text { fill: #97a2b5; font-size: 10px; font-family: inherit; }
+.commerce-trend-area { fill: url(#commerceTrendFill); fill: rgba(91, 113, 234, .1); }
+.commerce-trend-line { fill: none; stroke: #5d72e6; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.commerce-trend-svg circle { fill: #fff; stroke: #5d72e6; stroke-width: 2; }
+.commerce-trend-svg circle:hover { r: 5; }
+.commerce-risk-distribution { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.commerce-risk-summary { display: grid; gap: 3px; min-width: 0; padding: 13px; color: #738097; background: #fbfcff; border: 1px solid #e8edf5; border-radius: 12px; cursor: pointer; font: inherit; text-align: left; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.commerce-risk-summary:hover, .commerce-risk-summary:focus-visible, .commerce-risk-summary.active { outline: none; transform: translateY(-1px); border-color: #bfcaf2; box-shadow: 0 5px 14px rgba(64, 86, 153, .08); }
+.commerce-risk-summary b { color: #34415a; font-size: 22px; line-height: 1; }.commerce-risk-summary span { font-size: 11px; font-weight: 800; }
+.commerce-risk-summary.excellent { background: #f9fffd; border-color: #d9f4ea; }.commerce-risk-summary.excellent span { color: #18866d; }
+.commerce-risk-summary.normal { background: #f9fbff; border-color: #e4ebf9; }.commerce-risk-summary.normal span { color: #516bcb; }
+.commerce-risk-summary.watch { background: #fffdf8; border-color: #f9eac9; }.commerce-risk-summary.watch span { color: #ad7717; }
+.commerce-risk-summary.high { background: #fff9f3; border-color: #f7dcc3; }.commerce-risk-summary.high span { color: #c57632; }
+.commerce-risk-summary.extreme { background: #fffafb; border-color: #ffe1e5; }.commerce-risk-summary.extreme span { color: #c15364; }
+.advice-card.high { background: #fff9f3; border-color: #f7dcc3; }.advice-card.high .advice-icon { background: #d8843d; }.advice-card.high small { color: #b66e2d; }
+.advice-card.normal { background: #f9fbff; border-color: #e4ebf9; }.advice-card.normal .advice-icon { background: #6180f5; }
+.funnel-status { font-style: normal; font-weight: 800; }.funnel-status.watch { color: #ad7717; }.funnel-status.high, .funnel-status.extreme { color: #c25452; }.funnel-status.normal { color: #4f6fcb; }.funnel-status.excellent { color: #18866d; }
+.commerce-funnel-stage.risk-watch { border-color: #f7dfad; background: #fffdf8; }.commerce-funnel-stage.risk-high, .commerce-funnel-stage.risk-extreme { border-color: #f5d7c5; background: #fffaf7; }
+.b2c-analysis-table { min-width: 1300px; }
+@media (max-width: 980px) { .commerce-risk-distribution { grid-template-columns: repeat(3, minmax(0, 1fr)); }.commerce-segmented { justify-content: flex-start; } }
+@media (max-width: 680px) { .commerce-risk-distribution { grid-template-columns: repeat(2, minmax(0, 1fr)); }.commerce-segmented { width: 100%; }.commerce-segmented button { flex: 1 0 auto; }.commerce-trend-svg { height: 205px; }.commerce-trend-chart { min-height: 209px; } }
+
+/* B2C diagnostic details: compact links preserve table density while exposing full copy. */
+.truncated-detail { display: flex; min-width: 150px; align-items: center; gap: 7px; }
+.truncated-detail > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commerce-detail-link { flex: 0 0 auto; }
+.commerce-detail-modal { width: min(680px, calc(100vw - 36px)); }
+.commerce-detail-copy { margin: 0; padding: 14px 15px; color: #46536b; background: #f7f9fd; border: 1px solid #e7ebf4; border-radius: 10px; line-height: 1.7; white-space: pre-wrap; }
+.commerce-detail-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0 0 14px; }
+.commerce-detail-context div { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid #edf0f5; }
+.commerce-detail-context dt { color: #8490a6; font-size: 11px; }
+.commerce-detail-context dd { margin: 0; color: #32415d; font-size: 11px; font-weight: 800; text-align: right; }
+.commerce-detail-section { margin: 0 0 14px; }
+.commerce-detail-section h3 { margin: 0 0 6px; color: #273550; font-size: 12px; }
+.commerce-candidate-status { min-width: 180px; }
+.commerce-candidate-status > span { display: block; margin-bottom: 4px; color: #a24d3e; font-size: 10px; font-weight: 800; }
+.commerce-action-links { display: flex; flex-wrap: wrap; gap: 4px; }
+.commerce-action-links .small-btn { white-space: nowrap; }
+.commerce-detail-actions { justify-content: flex-end; }
+@media (max-width: 760px) { .commerce-detail-context { grid-template-columns: 1fr; }.commerce-detail-modal { padding: 18px; }.commerce-action-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Shared B2B/B2C import mapping preview. It intentionally reuses the existing
+   modal, labels and form controls rather than introducing a new dashboard UI. */
+.ad-import-mapping-box { width: min(800px, calc(100vw - 36px)); }
+.ad-import-mapping-summary { margin: 12px 0; color: #44536d; font-size: 12px; font-weight: 700; }
+.ad-import-mapping-section { margin-top: 16px; }
+.ad-import-mapping-section h3 { margin: 0 0 8px; color: #36435e; font-size: 13px; }
+.ad-import-mapping-details summary { cursor: pointer; color: #36435e; font-size: 13px; font-weight: 800; list-style: none; }
+.ad-import-mapping-details summary::-webkit-details-marker { display: none; }
+.ad-import-mapping-details summary::after { content: "查看"; float: right; color: #71809a; font-size: 11px; font-weight: 700; }
+.ad-import-mapping-details[open] summary::after { content: "收起"; }
+.ad-import-mapping-details .ad-import-mapping-list { margin-top: 8px; }
+.ad-import-mapping-list { display: grid; gap: 7px; max-height: 180px; overflow: auto; }
+.ad-import-mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .85fr); align-items: center; gap: 12px; padding: 10px 11px; border: 1px solid #e7ecf4; border-radius: 10px; background: #fbfcff; }
+.ad-import-mapping-row b { display: block; overflow: hidden; color: #34415c; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ad-import-mapping-row small { display: block; margin-top: 3px; overflow: hidden; color: #8490a4; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.ad-import-mapping-row select { width: 100%; margin: 0; }
+.ad-import-mapping-status { display: block; color: #27856c; font-size: 11px; font-weight: 800; }
+.ad-import-mapping-status.unused { color: #8893a5; }
+@media (max-width: 620px) { .ad-import-mapping-row { grid-template-columns: 1fr; gap: 7px; } .ad-import-mapping-list { max-height: 220px; } }
+
+@media (max-width: 560px) {
+  .date-range-fields { grid-template-columns: 1fr; }
 }

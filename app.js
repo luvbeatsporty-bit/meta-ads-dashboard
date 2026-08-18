@@ -1,15 +1,23 @@
-import { DEFAULT_RULES, LEAD_FIELDS, createAdRecord } from './data-model.js';
-import { importAdFiles } from './excel-import.js';
+import { BUSINESS_MODE, DEFAULT_COMMERCE_RULES, DEFAULT_RULES, LEAD_FIELDS, createAdRecord } from './data-model.js';
+import { parseAdImportPreview, previewAdFiles } from './excel-import.js';
+import { applyMappingOverrides, getMetricLabel, groupMappingForDisplay, mappingConfidenceLabel, normalizeHeader } from './field-mapper.js';
 import { readLeadFiles, suggestedMapping, mapLeadFiles, matchLeadsToAds } from './lead-import.js';
 import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroups, leadMetrics, classifyLead, averageFrequency, frequencySignals } from './metrics.js';
 import { diagnose, RISK_ORDER } from './diagnosis.js';
 import { renderCharts } from './charts.js';
 import { downloadCsv } from './export.js';
-import { loadActions, saveActions, saveDashboardData, loadDashboardData, clearDashboardData } from './storage.js';
+import { loadActions, saveActions, saveDashboardData, loadDashboardData } from './storage.js';
+import { commerceDiagnostics } from './commerce-diagnosis.js';
+import { getCommerceDetail, renderCommerceAnalysisModules, renderCommerceAdvice, renderCommerceDashboard, renderCommerceRulesForm, renderCommerceTrend, renderFunnelPage } from './commerce-ui.js';
+import { clampDateRange, filterAdsByDateRange, formatDateRange, getAvailableDateRange, getDateRangePresets, isValidDateRange } from './date-range.js';
 
 const $ = id => document.getElementById(id);
 const RULES_KEY = 'personal-ads-intelligence-rules-v1';
+const BUSINESS_MODE_KEY = 'personal-ads-intelligence-business-mode-v1';
+const COMMERCE_STOP_HITS_KEY = 'personal-ads-intelligence-commerce-stop-hits-v1';
+const CUSTOM_FIELD_MAPPINGS_KEY = 'personal-ads-intelligence-custom-field-mappings-v1';
 const ACTION_SCOPE = 'default';
+const COMMERCE_ACTION_SCOPE = 'b2c';
 const LIST_LIMIT = 5;
 const RULE_INPUTS = {
   extremeSpend: 'extremeSpendRule',
@@ -29,13 +37,31 @@ const RULE_INPUTS = {
 
 const state = {
   ads: [],
+  commerceAds: [],
   leads: [],
   matches: [],
   charts: {},
   actions: {},
+  commerceActions: {},
   rules: { ...DEFAULT_RULES },
+  commerceRules: { ...DEFAULT_COMMERCE_RULES },
+  businessMode: localStorage.getItem(BUSINESS_MODE_KEY) === BUSINESS_MODE.B2C_ECOMMERCE ? BUSINESS_MODE.B2C_ECOMMERCE : BUSINESS_MODE.B2B_LEAD,
+  customFieldMappings: loadCustomFieldMappings(),
+  commerceExpanded: { advice: false, risks: false, countries: false, campaigns: false, creatives: false },
+  commerceRiskVisibleCount: LIST_LIMIT,
+  commerceRiskFilter: 'all',
+  commerceSort: { countries: 'spend', campaigns: 'spend', creatives: 'spend' },
+  commerceTrendMetric: 'spend',
+  commerceStopHits: {},
   pendingLeadFiles: [],
+  pendingAdImport: null,
   source: '未导入',
+  commerceSource: '未导入',
+  dateRanges: {
+    b2b: { available: { minDate: null, maxDate: null }, selected: { startDate: null, endDate: null } },
+    b2c: { available: { minDate: null, maxDate: null }, selected: { startDate: null, endDate: null } }
+  },
+  pendingDateRange: null,
   adviceFilter: 'all',
   riskFilter: 'all',
   expandedLists: { risks: false, countryQuality: false, campaigns: false },
@@ -53,14 +79,64 @@ const state = {
 function loadRules() {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_KEY) || '{}');
-    return { ...DEFAULT_RULES, ...saved };
+    // Migrate the existing flat B2B rule object without changing its values.
+    if (saved && (saved.b2b || saved.b2c)) return { b2b: { ...DEFAULT_RULES, ...(saved.b2b || {}) }, b2c: { ...DEFAULT_COMMERCE_RULES, ...(saved.b2c || {}) } };
+    return { b2b: { ...DEFAULT_RULES, ...saved }, b2c: { ...DEFAULT_COMMERCE_RULES } };
   } catch {
-    return { ...DEFAULT_RULES };
+    return { b2b: { ...DEFAULT_RULES }, b2c: { ...DEFAULT_COMMERCE_RULES } };
   }
 }
 
 function persistRules() {
-  localStorage.setItem(RULES_KEY, JSON.stringify(state.rules));
+  localStorage.setItem(RULES_KEY, JSON.stringify({ b2b: state.rules, b2c: state.commerceRules }));
+}
+
+function loadCommerceStopHits() {
+  try { return JSON.parse(localStorage.getItem(COMMERCE_STOP_HITS_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function persistCommerceStopHits() {
+  localStorage.setItem(COMMERCE_STOP_HITS_KEY, JSON.stringify(state.commerceStopHits));
+}
+
+function commerceRules() {
+  return { ...state.commerceRules, frequencyWarningThreshold: state.rules.frequencyWarningThreshold, frequencyHighRiskThreshold: state.rules.frequencyHighRiskThreshold, watchCtrPercent: state.rules.watchCtrPercent };
+}
+
+function commerceItems() {
+  return commerceDiagnostics(selectedAds(), commerceRules(), state.commerceStopHits);
+}
+
+function commerceRiskDetailCount() {
+  const diagnosisByGroup = new Map(commerceItems().map(item => [item.id, item.d]));
+  return selectedAds().filter(row => {
+    const level = diagnosisByGroup.get(`${row.campaign}|${row.country}`)?.level || 'normal';
+    return state.commerceRiskFilter === 'all' || level === state.commerceRiskFilter;
+  }).length;
+}
+
+function advanceCommerceRiskDetailRows() {
+  const total = commerceRiskDetailCount();
+  if (state.commerceRiskVisibleCount >= total) {
+    state.commerceRiskVisibleCount = LIST_LIMIT;
+    return;
+  }
+  const next = state.commerceRiskVisibleCount <= LIST_LIMIT
+    ? 50
+    : state.commerceRiskVisibleCount + 50;
+  state.commerceRiskVisibleCount = Math.min(next, total);
+}
+
+function recordCommerceDiagnosticPass() {
+  const rules = commerceRules();
+  const candidates = commerceDiagnostics(selectedAds(), rules, {});
+  const next = {};
+  candidates.forEach(item => {
+    const qualifies = item.purchases === 0 && item.spend >= rules.targetCpa * rules.noPurchaseStopSpendMultiplier && item.dayCount >= 2;
+    next[item.id] = qualifies ? Math.min((state.commerceStopHits[item.id] || 0) + 1, 2) : 0;
+  });
+  state.commerceStopHits = next;
+  persistCommerceStopHits();
 }
 
 function toast(text) {
@@ -71,20 +147,110 @@ function toast(text) {
   window.toastTimer = setTimeout(() => element.classList.remove('show'), 3000);
 }
 
+function activeAds() {
+  return state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? state.commerceAds : state.ads;
+}
+
+function dateModeKey(mode = state.businessMode) {
+  return mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b';
+}
+
+function dateStateForMode(mode = state.businessMode) {
+  return state.dateRanges[dateModeKey(mode)];
+}
+
 function selectedAds() {
   const country = $('countryFilter').value;
   const campaign = $('campaignFilter').value;
   const search = $('searchInput').value.trim().toLowerCase();
-  return state.ads.filter(ad => (
+  const dateState = dateStateForMode();
+  const dateFiltered = filterAdsByDateRange(activeAds(), dateState.selected);
+  return dateFiltered.filter(ad => (
     (!country || ad.country === country)
     && (!campaign || ad.campaign === campaign)
     && (!search || `${ad.country} ${ad.campaign} ${ad.adSet} ${ad.ad} ${ad.creative}`.toLowerCase().includes(search))
   ));
 }
 
+function setAvailableDateRange(mode = state.businessMode, { resetSelection = false } = {}) {
+  const key = dateModeKey(mode);
+  const source = mode === BUSINESS_MODE.B2C_ECOMMERCE ? state.commerceAds : state.ads;
+  const available = getAvailableDateRange(source);
+  const current = state.dateRanges[key];
+  current.available = available;
+  current.selected = available.minDate && available.maxDate
+    ? (resetSelection || !current.selected.startDate || !current.selected.endDate
+      ? { startDate: available.minDate, endDate: available.maxDate }
+      : clampDateRange(current.selected, available))
+    : { startDate: null, endDate: null };
+}
+
 function dateRange() {
-  const dates = state.ads.flatMap(ad => [ad.dateStart, ad.dateEnd]).filter(Boolean).sort();
-  $('rangeText').value = dates.length ? `${dates[0]} 至 ${dates[dates.length - 1]}` : '未识别报告日期';
+  const dateState = dateStateForMode();
+  const hasData = activeAds().length > 0;
+  const emptyLabel = hasData ? '无日期数据' : '未识别报告日期';
+  const rangeText = $('rangeText');
+  rangeText.value = formatDateRange(dateState.selected, emptyLabel);
+  rangeText.disabled = !dateState.available.minDate || !dateState.available.maxDate;
+  rangeText.setAttribute('aria-disabled', String(rangeText.disabled));
+  if (!rangeText.disabled) {
+    rangeText.min = dateState.available.minDate;
+    rangeText.max = dateState.available.maxDate;
+  } else {
+    rangeText.removeAttribute('min');
+    rangeText.removeAttribute('max');
+  }
+  const availableText = $('dateRangeAvailableText');
+  if (availableText) availableText.textContent = dateState.available.minDate
+    ? `可分析日期：${dateState.available.minDate} 至 ${dateState.available.maxDate}`
+    : emptyLabel;
+}
+
+function openDateRangePicker() {
+  const dateState = dateStateForMode();
+  if (!dateState.available.minDate || !dateState.available.maxDate) return;
+  state.pendingDateRange = { ...dateState.selected };
+  $('dateRangeStart').value = state.pendingDateRange.startDate || dateState.available.minDate;
+  $('dateRangeEnd').value = state.pendingDateRange.endDate || dateState.available.maxDate;
+  $('dateRangeStart').min = dateState.available.minDate;
+  $('dateRangeStart').max = dateState.available.maxDate;
+  $('dateRangeEnd').min = dateState.available.minDate;
+  $('dateRangeEnd').max = dateState.available.maxDate;
+  $('dateRangeError').textContent = '';
+  const presets = getDateRangePresets(dateState.available);
+  $('dateRangeQuickOptions').innerHTML = presets.map(item => `<button type="button" class="btn soft date-range-quick" data-date-range-preset="${item.key}">${item.label}</button>`).join('');
+  $('dateRangeModal').classList.add('open');
+}
+
+function closeDateRangePicker() {
+  $('dateRangeModal').classList.remove('open');
+  state.pendingDateRange = null;
+}
+
+function applyDateRange() {
+  const dateState = dateStateForMode();
+  const range = { startDate: $('dateRangeStart').value, endDate: $('dateRangeEnd').value };
+  if (!isValidDateRange(range, dateState.available)) {
+    $('dateRangeError').textContent = '请选择数据范围以内的日期，并确保结束日期不早于开始日期。';
+    return;
+  }
+  dateState.selected = range;
+  closeDateRangePicker();
+  resetExpandedLists();
+  resetDetailCharts();
+  dateRange();
+  renderDashboard();
+  toast(`已应用分析日期：${formatDateRange(range)}`);
+}
+
+function resetDateRange() {
+  const dateState = dateStateForMode();
+  if (dateState.available.minDate && dateState.available.maxDate) {
+    dateState.selected = { startDate: dateState.available.minDate, endDate: dateState.available.maxDate };
+  } else {
+    dateState.selected = { startDate: null, endDate: null };
+  }
+  dateRange();
 }
 
 function populateFilters() {
@@ -95,8 +261,9 @@ function populateFilters() {
     element.value = values.includes(previous) ? previous : '';
   };
 
-  setOptions('countryFilter', [...new Set(state.ads.map(ad => ad.country))].filter(Boolean).sort(), '国家 / 地区');
-  setOptions('campaignFilter', [...new Set(state.ads.map(ad => ad.campaign))].filter(Boolean).sort(), '广告系列');
+  const ads = activeAds();
+  setOptions('countryFilter', [...new Set(ads.map(ad => ad.country))].filter(Boolean).sort(), '国家 / 地区');
+  setOptions('campaignFilter', [...new Set(ads.map(ad => ad.campaign))].filter(Boolean).sort(), '广告系列');
 }
 
 function currentQuality() {
@@ -169,8 +336,21 @@ function filteredRiskItems(items) {
   return state.riskFilter === 'all' ? items : items.filter(item => item.d.level === state.riskFilter);
 }
 
-function resetExpandedLists() {
+function resetB2BViewState() {
   state.expandedLists = { risks: false, countryQuality: false, campaigns: false };
+}
+
+function resetCommerceViewState() {
+  state.commerceExpanded = { advice: false, risks: false, countries: false, campaigns: false, creatives: false };
+  state.commerceRiskVisibleCount = LIST_LIMIT;
+  state.commerceRiskFilter = 'all';
+  state.commerceSort = { countries: 'spend', campaigns: 'spend', creatives: 'spend' };
+  state.commerceTrendMetric = 'spend';
+}
+
+function resetExpandedLists() {
+  resetB2BViewState();
+  resetCommerceViewState();
 }
 
 function resetDetailCharts() {
@@ -196,7 +376,7 @@ function renderListToggle(id, key, total, { noun = '条', expandLabel = '展开�
   }
   const isExpanded = state.expandedLists[key];
   const label = isExpanded ? `${collapseLabel} ↑` : `${expandLabel}（共 ${total} ${noun}） ↓`;
-  container.innerHTML = `<button type="button" class="list-toggle" data-list-toggle="${key}">${label}</button>`;
+  container.innerHTML = `<button type="button" class="list-toggle" data-list-toggle="${key}" aria-expanded="${String(isExpanded)}">${label}</button>`;
 }
 
 function adviceItems(items) {
@@ -288,19 +468,40 @@ function renderAdviceModal() {
 }
 
 function renderDashboard() {
+  if (state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE) {
+    const rows = selectedAds();
+    const items = commerceItems();
+    renderCommerceDashboard({
+      rows,
+      diagnostics: items,
+      expandedLists: state.commerceExpanded,
+      riskVisibleCount: state.commerceRiskVisibleCount,
+      riskFilter: state.commerceRiskFilter,
+      sort: state.commerceSort,
+      trendMetric: state.commerceTrendMetric,
+      actions: state.commerceActions,
+      rules: commerceRules()
+    });
+    syncCommerceSortControls();
+    renderFunnelPage({ rows, diagnostics: items });
+    $('statusDot').classList.toggle('ready', state.commerceAds.length > 0);
+    $('statusText').textContent = state.commerceAds.length ? `${state.commerceAds.length} 条 B2C 广告记录已载入 · B2C 电商模式` : '等待导入 B2C Meta 电商报表';
+    $('b2cSourceLabel').textContent = state.commerceSource;
+    return;
+  }
   const rows = selectedAds();
   const total = sumAds(rows);
   const haveData = state.ads.length > 0;
 
-  const reachAvailable = rows.some(row => Object.hasOwn(row.sourceRows || {}, 'reach') || Number(row.reach) > 0);
+  const available = total.availableMetrics;
   const frequency = averageFrequency(rows);
-  $('mSpend').textContent = haveData ? money(total.spend) : '—';
-  $('mLeads').textContent = haveData ? integer(total.results) : '—';
-  $('mCpl').textContent = haveData && total.results ? money(total.spend / total.results) : '—';
-  $('mClicks').textContent = haveData ? integer(total.clicks) : '—';
-  $('mCtr').textContent = haveData ? pct(total.impressions ? total.clicks / total.impressions : 0) : '—';
-  $('mCpm').textContent = haveData ? money(total.impressions ? total.spend / total.impressions * 1000 : 0) : '—';
-  $('mReach').textContent = haveData && reachAvailable ? integer(total.reach) : '—';
+  $('mSpend').textContent = haveData && available.spend ? money(total.spend) : '—';
+  $('mLeads').textContent = haveData && available.results ? integer(total.results) : '—';
+  $('mCpl').textContent = haveData && total.cpl !== null ? money(total.cpl) : '—';
+  $('mClicks').textContent = haveData && available.clicks ? integer(total.clicks) : '—';
+  $('mCtr').textContent = haveData && total.ctr !== null ? pct(total.ctr) : '—';
+  $('mCpm').textContent = haveData && total.cpm !== null ? money(total.cpm) : '—';
+  $('mReach').textContent = haveData && available.reach ? integer(total.reach) : '—';
   $('mFrequency').textContent = haveData && frequency !== null ? `${frequency.toFixed(1)} 次` : '—';
 
   const countries = summarise(rows, 'country');
@@ -320,6 +521,36 @@ function renderDashboard() {
   $('statusDot').classList.toggle('ready', haveData);
   $('statusText').textContent = haveData ? `${state.ads.length} 条广告记录已载入` : '等待导入报表';
   $('dataSourceLabel').textContent = state.source;
+}
+
+function renderB2BListModules() {
+  const rows = selectedAds();
+  const countries = summarise(rows, 'country');
+  const campaigns = summarise(rows, 'campaign');
+  const items = diagnostics();
+  const rankings = countryQualityRankings(countries, items);
+  renderTables(campaigns, rankings);
+  renderRisks(items);
+}
+
+function syncCommerceSortControls() {
+  document.querySelectorAll('[data-commerce-sort]').forEach(button => {
+    const [group, metric] = String(button.dataset.commerceSort || '').split(':');
+    const active = state.commerceSort[group] === metric;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function renderCommerceAnalysisOnly() {
+  const rows = selectedAds();
+  const items = commerceItems();
+  renderCommerceAnalysisModules({ rows, diagnostics: items, expandedLists: state.commerceExpanded, riskVisibleCount: state.commerceRiskVisibleCount, riskFilter: state.commerceRiskFilter, sort: state.commerceSort, actions: state.commerceActions });
+  syncCommerceSortControls();
+}
+
+function renderCommerceAdviceOnly() {
+  renderCommerceAdvice(commerceItems(), Boolean(state.commerceExpanded.advice), commerceRules());
 }
 
 function renderChartToggleButtons() {
@@ -375,6 +606,7 @@ function actionLabel(action) {
   const labels = {
     handled: '已标记人工处理',
     watch: '保持观察',
+    manualPause: '已记录人工暂停意向（未执行 Meta 操作）',
     ignore: '已忽略本次提醒'
   };
   return `${labels[action]} · ${time}`;
@@ -390,6 +622,61 @@ function saveAction(id, action) {
   state.actions[id] = actionLabel(action);
   saveActions(ACTION_SCOPE, state.actions);
   toast(state.actions[id]);
+}
+
+function saveCommerceAction(id, action) {
+  if (!id) return;
+  if (action === 'restore') {
+    delete state.commerceActions[id];
+    saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+    toast('B2C 已恢复为待人工复核');
+    return;
+  }
+  state.commerceActions[id] = actionLabel(action);
+  saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+  toast(`B2C：${state.commerceActions[id]}`);
+}
+
+function closeCommerceDetail() {
+  $('commerceDetailModal')?.classList.remove('open');
+}
+
+function renderCommerceDetailModal(detail) {
+  if (!detail) return;
+  const context = Array.isArray(detail.context) ? detail.context : [];
+  const currentAction = detail.actionId ? state.commerceActions[detail.actionId] : '';
+  $('commerceDetailEyebrow').textContent = detail.eyebrow || 'B2C DIAGNOSTIC DETAIL';
+  $('commerceDetailTitle').textContent = detail.title || '诊断详情';
+  const tags = Array.isArray(detail.diagnosisTags) ? detail.diagnosisTags.filter(Boolean) : [];
+  const affectedObjects = Array.isArray(detail.affectedObjects) ? detail.affectedObjects : [];
+  const formatCommerceNumber = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US') : '—';
+  const formatCommerceMoney = value => Number.isFinite(Number(value)) ? `$${Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—';
+  const formatCommerceRoas = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}×` : '—';
+  const formatCommerceCpa = value => Number.isFinite(Number(value)) ? formatCommerceMoney(value) : '—';
+  $('commerceDetailContent').innerHTML = `
+    ${context.length ? `<dl class="commerce-detail-context">${context.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>` : ''}
+    ${detail.primaryDiagnosis ? `<section class="commerce-detail-section"><h3>Primary Diagnosis</h3><p class="commerce-detail-copy">${esc(detail.primaryDiagnosis)}</p></section>` : ''}
+    ${tags.length ? `<section class="commerce-detail-section"><h3>辅助诊断</h3><p class="commerce-detail-copy">${esc(tags.join(' · '))}</p></section>` : ''}
+    <section class="commerce-detail-section"><h3>触发规则 / 风险原因</h3><p class="commerce-detail-copy">${esc(detail.rule || '—')}</p></section>
+    <section class="commerce-detail-section"><h3>完整 AI 优化建议</h3><p class="commerce-detail-copy">${esc(detail.fullRecommendation || detail.recommendation || detail.text || '—')}</p></section>
+    <section class="commerce-detail-section"><h3>建议操作</h3><p class="commerce-detail-copy">${esc(detail.recommendedAction || '继续观察')}</p></section>
+    ${affectedObjects.length ? `<section class="commerce-detail-section"><h3>受影响对象（${affectedObjects.length} 个）</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Country</th><th>Campaign</th><th>Ad</th><th>Spend</th><th>Purchases</th><th>CPA</th><th>ROAS</th><th>Trigger Rule</th></tr></thead><tbody>${affectedObjects.map(item => `<tr><td>${esc(item.country || '—')}</td><td>${esc(item.campaign || '—')}</td><td>${esc(item.ad || '—')}</td><td>${formatCommerceMoney(item.spend)}</td><td>${formatCommerceNumber(item.purchases)}</td><td>${formatCommerceCpa(item.cpa)}</td><td>${formatCommerceRoas(item.roas)}</td><td>${esc(item.rule || '—')}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+  `;
+  $('commerceDetailActions').dataset.commerceDetailId = detail.id || '';
+  $('commerceDetailActions').innerHTML = detail.stopCandidate && detail.actionId ? `
+    <span class="mini-note">${esc(currentAction || '待人工确认')} · 仅记录人工处理，不会调用 Meta 暂停接口</span>
+    <button type="button" class="small-btn" data-commerce-action="handled" data-commerce-action-id="${esc(detail.actionId)}">标记已处理</button>
+    <button type="button" class="small-btn" data-commerce-action="watch" data-commerce-action-id="${esc(detail.actionId)}">保持观察</button>
+    <button type="button" class="small-btn" data-commerce-action="manualPause" data-commerce-action-id="${esc(detail.actionId)}">人工暂停</button>
+    <button type="button" class="small-btn" data-commerce-action="ignore" data-commerce-action-id="${esc(detail.actionId)}">忽略本次提醒</button>
+  ` : '';
+}
+
+function openCommerceDetail(detailId) {
+  const detail = getCommerceDetail(detailId);
+  if (!detail) return;
+  renderCommerceDetailModal(detail);
+  $('commerceDetailModal').classList.add('open');
 }
 
 function renderRisks(items) {
@@ -482,13 +769,26 @@ function renderLeadQuality() {
 
 function renderDataQuality() {
   const container = $('qualityContent');
-  const ads = state.ads;
-  const leads = state.leads;
-  const quality = currentQuality();
+  const isCommerce = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE;
+  const ads = isCommerce ? state.commerceAds : state.ads;
   const count = field => ads.filter(ad => Object.hasOwn(ad.sourceRows || {}, field) || String(ad[field] ?? '').trim()).length;
   const adSummary = ads.length ? `${ads.length} 条广告记录` : '未导入';
-  const qualityText = leads.length ? `已匹配 ${quality.matchedCount}，待确认 ${quality.pendingCount}，未匹配 ${quality.unmatchedCount}` : '尚未导入销售 Lead 文件';
 
+  if (isCommerce) {
+    const availability = field => ads.length ? `${Math.round(count(field) / ads.length * 100)}%` : '—';
+    container.innerHTML = `
+      <div class="quality-item"><b>${adSummary}</b><p>B2C 广告数据载入情况</p></div>
+      <div class="quality-item"><b>${availability('spend')}</b><p>Spend 字段可用率（0 值也视为有效）</p></div>
+      <div class="quality-item"><b>${availability('impressions')}</b><p>Impressions 字段可用率；缺失时 CTR、CPM 仅显示 —</p></div>
+      <div class="quality-item"><b>${availability('clicks')}</b><p>Link Clicks 字段可用率；缺失时漏斗点击率仅显示 —</p></div>
+      <div class="quality-item"><b>${availability('purchases')}</b><p>Purchases 字段可用率；缺失时无法判断 CPA 和购买转化</p></div>
+      <div class="quality-item"><b>${availability('metaAttributedGmv')}</b><p>Meta Attributed GMV 字段可用率；缺失时 ROAS、AOV 仅显示 —</p></div>`;
+    return;
+  }
+
+  const leads = state.leads;
+  const quality = currentQuality();
+  const qualityText = leads.length ? `已匹配 ${quality.matchedCount}，待确认 ${quality.pendingCount}，未匹配 ${quality.unmatchedCount}` : '尚未导入销售 Lead 文件';
   container.innerHTML = `
     <div class="quality-item"><b>${adSummary}</b><p>广告数据载入情况</p></div>
     <div class="quality-item"><b>${ads.length ? `${Math.round(count('spend') / ads.length * 100)}%` : '—'}</b><p>花费字段可用率（0 值也视为有效）</p></div>
@@ -514,9 +814,11 @@ function markDataChanged() { state.changedSinceStartup = true; }
 async function persistImportedData() {
   return Boolean(await saveDashboardData({
     ads: state.ads,
+    commerceAds: state.commerceAds,
     leads: state.leads,
     matches: state.matches,
-    source: state.source
+    source: state.source,
+    commerceSource: state.commerceSource
   }));
 }
 
@@ -533,19 +835,88 @@ async function applyLeadMapping() {
   toast(`已导入 ${state.leads.length} 条 Lead；请在 Lead 质量页查看匹配情况${saved ? '（已保存在本机浏览器）' : '；浏览器未能保存到本机'}`);
 }
 
+function placeSharedFilterBar() {
+  const filter = $('sharedFilterBar');
+  if (!filter) return;
+  const target = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? $('b2cMetrics') : $('dashboardView').querySelector('.metrics');
+  if (target && filter.nextElementSibling !== target) target.before(filter);
+}
+
+function switchBusinessMode(mode) {
+  if (!Object.values(BUSINESS_MODE).includes(mode)) return;
+  state.businessMode = mode;
+  localStorage.setItem(BUSINESS_MODE_KEY, mode);
+  document.body.dataset.businessMode = mode;
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === mode));
+  placeSharedFilterBar();
+  populateFilters();
+  dateRange();
+  resetExpandedLists();
+  resetDetailCharts();
+  switchView(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard');
+  renderDashboard();
+}
+
 function switchView(view) {
+  const allowedViews = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE
+    ? new Set(['ecommerce', 'funnel', 'quality', 'rules'])
+    : new Set(['dashboard', 'leads', 'quality', 'rules']);
+  if (!allowedViews.has(view)) view = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard';
   document.querySelectorAll('.view').forEach(item => item.classList.toggle('active', item.id === `${view}View`));
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   if (view === 'rules') renderRulesForm();
+  if (view === 'funnel' || view === 'quality') renderDashboard();
   document.body.classList.remove('nav-open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function renderRulesForm() {
+  const isCommerce = state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE;
+  const heading = $('rulesView').querySelector('.overview-heading');
+  if (heading) {
+    heading.querySelector('.eyebrow').textContent = isCommerce ? 'ECOMMERCE DIAGNOSTIC RULES' : 'DIAGNOSTIC RULES';
+    heading.querySelector('h1').textContent = isCommerce ? 'B2C 电商规则设置' : '规则设置';
+    heading.querySelector('p').textContent = isCommerce ? '调整 ROAS、CPA 与无购买阈值后，电商广告诊断将立即按新规则重新计算。' : '调整阈值后，广告诊断将立即按新规则重新计算。';
+  }
+  if (isCommerce) {
+    renderCommerceRulesForm(state.commerceRules, state.rules);
+    return;
+  }
   Object.entries(RULE_INPUTS).forEach(([key, id]) => { $(id).value = state.rules[key]; });
 }
 
 function saveRules() {
+  if (state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE) {
+    const next = { ...state.commerceRules };
+    document.querySelectorAll('[data-commerce-rule]').forEach(input => {
+      const key = input.dataset.commerceRule;
+      const value = Number(input.value);
+      next[key] = Number.isFinite(value) && value >= 0 ? value : DEFAULT_COMMERCE_RULES[key];
+    });
+    const nextFrequencyRules = { ...state.rules };
+    document.querySelectorAll('[data-frequency-rule]').forEach(input => {
+      const key = input.dataset.frequencyRule;
+      const value = Number(input.value);
+      nextFrequencyRules[key] = Number.isFinite(value) && value >= 0 && value <= 20 ? value : DEFAULT_RULES[key];
+    });
+    if (nextFrequencyRules.frequencyHighRiskThreshold < nextFrequencyRules.frequencyWarningThreshold) { toast('高风险 Frequency 必须大于或等于观察 Frequency。'); return; }
+    if (next.targetRoas <= 0) { toast('目标 ROAS 必须大于 0。'); return; }
+    if (next.targetCpa <= 0) { toast('目标 CPA 必须大于 0。'); return; }
+    if (next.roasWatchRatio < 0 || next.roasWatchRatio > 1 || next.roasHighRiskRatio < 0 || next.roasHighRiskRatio > 1) { toast('ROAS 比例必须在 0 到 1 之间。'); return; }
+    if (next.roasHighRiskRatio > next.roasWatchRatio) { toast('高风险 ROAS 比例不能高于观察 ROAS 比例。'); return; }
+    if (next.cpaHighRiskMultiplier < next.cpaWatchMultiplier) { toast('CPA 高风险倍数必须大于或等于观察倍数。'); return; }
+    if (next.noPurchaseStopSpendMultiplier < next.noPurchaseHighSpendMultiplier) { toast('无购买关停候选倍数必须大于或等于高风险花费倍数。'); return; }
+    if (next.highCpaStopMultiplier < next.cpaHighRiskMultiplier) { toast('高 CPA 关停候选倍数必须大于或等于 CPA 高风险倍数。'); return; }
+    if (next.lowRoasStopRatio > next.roasHighRiskRatio) { toast('极低 ROAS 倍数不能高于高风险 ROAS 比例。'); return; }
+    state.commerceRules = next;
+    state.rules = nextFrequencyRules;
+    recordCommerceDiagnosticPass();
+    persistRules();
+    resetExpandedLists();
+    renderDashboard();
+    toast('B2C 电商规则已保存并重新诊断');
+    return;
+  }
   const nextRules = { ...state.rules };
   Object.entries(RULE_INPUTS).forEach(([key, id]) => {
     const value = Number($(id).value);
@@ -567,6 +938,15 @@ function saveRules() {
 }
 
 function resetRules() {
+  if (state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE) {
+    state.commerceRules = { ...DEFAULT_COMMERCE_RULES };
+    persistRules();
+    renderRulesForm();
+    resetExpandedLists();
+    renderDashboard();
+    toast('已恢复 B2C 默认规则');
+    return;
+  }
   state.rules = { ...DEFAULT_RULES };
   persistRules();
   renderRulesForm();
@@ -615,8 +995,10 @@ async function loadDemo() {
   state.leads = [];
   state.matches = [];
   state.source = '演示数据';
+  setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
   populateFilters();
   dateRange();
+  recordCommerceDiagnosticPass();
   const saved = await persistImportedData();
   resetExpandedLists();
   resetDetailCharts();
@@ -630,38 +1012,222 @@ async function clearData() {
   state.leads = [];
   state.matches = [];
   state.source = '未导入';
-  populateFilters();
-  dateRange();
-  await clearDashboardData();
-  resetExpandedLists();
-  resetDetailCharts();
-  renderDashboard();
-  toast('已清除本机浏览器中保存的数据');
-}
-
-async function importAds(files) {
-  const selected = [...files];
-  if (selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) { toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。'); return; }
-  const usable = selected.filter(file => /\.(xlsx|csv)$/i.test(file.name));
-  if (!usable.length) { toast('请选择 .xlsx 或 .csv 格式的广告报表。'); return; }
-  markDataChanged();
-  const ads = await importAdFiles(usable);
-  if (!ads.length) {
-    toast('未识别到可分析的广告字段。请检查报表表头。');
-    return;
-  }
-  state.ads = ads;
-  state.leads = [];
-  state.matches = [];
-  state.source = 'Meta Excel';
+  setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
   populateFilters();
   dateRange();
   const saved = await persistImportedData();
-  resetExpandedLists();
+  resetB2BViewState();
   resetDetailCharts();
   renderDashboard();
-  toast(`已导入 ${ads.length} 条广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  toast(saved ? '已清除 B2B 广告与 Lead 数据；B2C 数据保持不变' : '已清除 B2B 广告与 Lead 数据');
 }
+
+function openCommerceClearConfirm() {
+  $('clearCommerceDataModal')?.classList.add('open');
+}
+
+function closeCommerceClearConfirm() {
+  $('clearCommerceDataModal')?.classList.remove('open');
+}
+
+async function clearCommerceData() {
+  closeCommerceClearConfirm();
+  markDataChanged();
+  state.commerceAds = [];
+  state.commerceSource = '未导入';
+  state.commerceStopHits = {};
+  setAvailableDateRange(BUSINESS_MODE.B2C_ECOMMERCE, { resetSelection: true });
+  persistCommerceStopHits();
+  state.commerceActions = {};
+  saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+  $('countryFilter').value = '';
+  $('campaignFilter').value = '';
+  $('searchInput').value = '';
+  resetCommerceViewState();
+  populateFilters();
+  dateRange();
+  const saved = await persistImportedData();
+  renderDashboard();
+  toast(saved ? '已清除 B2C 广告数据；B2B 数据和规则设置保持不变' : '已清除 B2C 广告数据；B2B 数据和规则设置保持不变');
+}
+
+function recognisedFieldCount(ads = []) {
+  const fields = new Set();
+  ads.forEach(ad => Object.entries(ad.availableMetrics || {}).forEach(([key, available]) => {
+    if (available) fields.add(key);
+  }));
+  return fields.size;
+}
+
+function mappingPreviewModal() { return $('adImportMappingModal'); }
+
+function loadCustomFieldMappings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_FIELD_MAPPINGS_KEY) || '{}');
+    return { b2b: saved?.b2b || {}, b2c: saved?.b2c || {} };
+  } catch { return { b2b: {}, b2c: {} }; }
+}
+
+function customMappingsForMode(mode) {
+  return state.customFieldMappings[mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b'] || {};
+}
+
+function saveCustomFieldMappings() {
+  try { localStorage.setItem(CUSTOM_FIELD_MAPPINGS_KEY, JSON.stringify(state.customFieldMappings)); } catch { /* Browser storage is optional. */ }
+}
+
+function rememberConfirmedFieldMappings(pending, overrides) {
+  const scope = pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b';
+  const mappingById = new Map(pending.preview.sheets.flatMap(sheet => sheet.mapping.map(item => [item.id, item])));
+  let changed = false;
+  Object.entries(overrides).forEach(([id, metric]) => {
+    if (!metric || metric === 'ignore') return;
+    const item = mappingById.get(id);
+    const key = normalizeHeader(item?.sourceHeader || '');
+    if (!key) return;
+    state.customFieldMappings[scope][key] = metric;
+    changed = true;
+  });
+  if (changed) saveCustomFieldMappings();
+}
+
+function previewNeedsReview(preview) {
+  return preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'));
+}
+
+function pendingImportOverrides() {
+  const modal = mappingPreviewModal();
+  return Object.fromEntries([...modal.querySelectorAll('[data-ad-import-map-ids]')]
+    .flatMap(select => String(select.dataset.adImportMapIds || '').split(',').filter(Boolean)
+      .map(value => [decodeURIComponent(value), select.value])));
+}
+
+function renderAdImportMappingPreview() {
+  const pending = state.pendingAdImport;
+  if (!pending) return;
+  const modal = mappingPreviewModal();
+  const rows = pending.preview.sheets.flatMap(sheet => sheet.mapping.map(item => ({ ...item, sheetName: sheet.sheetName })));
+  const confirmed = groupMappingForDisplay(rows, 'confirmed');
+  const review = groupMappingForDisplay(rows, 'needs_confirmation');
+  const unused = groupMappingForDisplay(rows, 'unused');
+  $('adImportMappingSummary').textContent = `已自动识别 ${confirmed.length} 个字段${review.length ? `；${review.length} 个字段需要确认` : ''}${unused.length ? `；${unused.length} 个未使用` : ''}。辅助字段默认不导入，不会阻止继续导入。`;
+  $('adImportMappingConfirmedTitle').textContent = `已自动识别（${confirmed.length}）`;
+  $('adImportMappingReviewTitle').textContent = `需要确认（${review.length}）`;
+  $('adImportMappingUnusedTitle').textContent = `未使用字段（${unused.length}）`;
+  const sections = modal.querySelectorAll('.ad-import-mapping-details');
+  if (sections[0]) sections[0].open = false;
+  if (sections[1]) sections[1].open = review.length > 0;
+  if (sections[2]) sections[2].open = false;
+  const fieldRow = item => {
+    const options = ['<option value="ignore">不导入 / 未使用</option>', ...item.candidates.map(metric => `<option value="${esc(metric)}">${esc(getMetricLabel(metric))}</option>`)].join('');
+    const encodedIds = item.mapIds.map(id => encodeURIComponent(id)).join(',');
+    const control = item.status === 'needs_confirmation'
+      ? `<select data-ad-import-map-ids="${esc(encodedIds)}">${options}</select>`
+      : `<span class="ad-import-mapping-status ${esc(item.status)}">${item.status === 'confirmed' ? `${esc(getMetricLabel(item.canonicalMetric))} · ${esc(mappingConfidenceLabel(item.confidence))}` : '未使用'}</span>`;
+    const sourceHeaders = item.sourceHeaders.length ? item.sourceHeaders.join(' / ') : '（空表头）';
+    const sourceInfo = [item.sheetNames.length > 1 ? `${item.sheetNames.length} 个 Sheet` : item.sheetNames[0], item.matchTypes.join(' · ')].filter(Boolean).join(' · ');
+    return `<div class="ad-import-mapping-row"><div><b>${esc(sourceHeaders)}</b><small>${esc(sourceInfo)}</small></div><div>${control}</div></div>`;
+  };
+  $('adImportMappingConfirmed').innerHTML = confirmed.length ? confirmed.map(fieldRow).join('') : '<div class="empty">暂未自动确认字段。</div>';
+  $('adImportMappingReview').innerHTML = review.length ? review.map(fieldRow).join('') : '<div class="mini-note">没有需要人工确认的歧义字段。</div>';
+  $('adImportMappingUnused').innerHTML = unused.length ? unused.map(fieldRow).join('') : '<div class="mini-note">没有未使用字段。</div>';
+  $('applyAdImportMappingButton').textContent = review.length ? '确认字段并导入' : '确认导入';
+  modal.classList.add('open');
+}
+
+async function beginAdImport(files, mode) {
+  const selected = [...(files || [])];
+  if (!selected.length) return;
+  const extensions = mode === BUSINESS_MODE.B2C_ECOMMERCE ? /\.(xlsx|xls|csv)$/i : /\.(xlsx|csv)$/i;
+  if (mode === BUSINESS_MODE.B2B_LEAD && selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) {
+    toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。');
+    return;
+  }
+  const usable = selected.filter(file => extensions.test(file.name));
+  if (!usable.length) {
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：仅支持 .xlsx、.xls 或 .csv 文件。' : '请选择 .xlsx 或 .csv 格式的广告报表。');
+    return;
+  }
+  if (usable.some(file => !file.size)) {
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：文件为空。' : '广告报表导入失败：文件为空。');
+    return;
+  }
+  try {
+    const preview = await previewAdFiles(usable, { customMappings: customMappingsForMode(mode) });
+    if (!preview.confirmedColumns && !preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'))) {
+      toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：未识别到可支持的 Meta 广告字段，请检查文件表头。' : '未识别到可支持的 Meta 广告字段，请检查文件表头。');
+      return;
+    }
+    state.pendingAdImport = { mode, files: usable, preview };
+    renderAdImportMappingPreview();
+  } catch (error) {
+    console.error('广告报表字段识别失败', error);
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? commerceImportErrorMessage(error) : `广告报表导入失败：${String(error?.message || '请检查文件格式和内容。')}`);
+  }
+}
+
+async function applyAdImportMapping() {
+  const pending = state.pendingAdImport;
+  if (!pending) return;
+  const overrides = pendingImportOverrides();
+  const effective = pending.preview.sheets.flatMap(sheet => applyMappingOverrides(sheet.mapping, overrides));
+  if (!effective.some(item => item.status === 'confirmed' && item.internalKey)) {
+    toast('请至少确认一个可导入的广告字段。');
+    return;
+  }
+  try {
+    const ads = parseAdImportPreview(pending.preview, overrides, { customMappings: customMappingsForMode(pending.mode) });
+    rememberConfirmedFieldMappings(pending, overrides);
+    if (!ads.length) {
+      toast(pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：没有可用数据记录。' : '广告报表导入失败：没有可用数据记录。');
+      return;
+    }
+    markDataChanged();
+    if (pending.mode === BUSINESS_MODE.B2C_ECOMMERCE) {
+      state.commerceAds = ads;
+      state.commerceSource = `B2C Meta ${pending.files.every(file => /\.csv$/i.test(file.name)) ? 'CSV' : 'Excel'}`;
+      resetCommerceViewState();
+    } else {
+      state.ads = ads;
+      state.leads = [];
+      state.matches = [];
+      state.source = 'Meta Excel';
+      resetExpandedLists();
+      resetDetailCharts();
+    }
+    setAvailableDateRange(pending.mode, { resetSelection: true });
+    populateFilters();
+    dateRange();
+    recordCommerceDiagnosticPass();
+    const saved = await persistImportedData();
+    mappingPreviewModal().classList.remove('open');
+    state.pendingAdImport = null;
+    renderDashboard();
+    const prefix = pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? ' 条 B2C 广告记录' : ' 条广告记录';
+    const mappedLabels = [...new Set(effective.filter(item => item.status === 'confirmed' && item.canonicalMetric).map(item => getMetricLabel(item.canonicalMetric)))];
+    const fieldResult = mappedLabels.length ? `；字段识别：${mappedLabels.slice(0, 8).join('、')}${mappedLabels.length > 8 ? '等' : ''}` : '';
+    toast(`已导入 ${ads.length}${prefix}，识别到 ${recognisedFieldCount(ads)} 个可分析字段${fieldResult}${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  } catch (error) {
+    console.error('广告报表导入失败', error);
+    toast(pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? commerceImportErrorMessage(error) : `广告报表导入失败：${String(error?.message || '请检查文件格式和内容。')}`);
+  }
+}
+
+function closeAdImportMappingPreview() {
+  mappingPreviewModal().classList.remove('open');
+  state.pendingAdImport = null;
+}
+
+async function importAds(files) { return beginAdImport(files, BUSINESS_MODE.B2B_LEAD); }
+
+function commerceImportErrorMessage(error) {
+  const message = String(error?.message || '').trim();
+  if (/empty|为空/i.test(message)) return 'B2C 广告报表导入失败：文件为空。';
+  if (/xlsx|workbook|zip|excel/i.test(message)) return 'B2C 广告报表导入失败：Excel 文件无法解析，请确认文件未损坏。';
+  return `B2C 广告报表导入失败${message ? `：${message}` : '，请检查文件格式和内容。'}`;
+}
+
+async function importCommerceAds(files) { return beginAdImport(files, BUSINESS_MODE.B2C_ECOMMERCE); }
 
 async function prepareLeads(files) {
   const selected = [...files];
@@ -704,9 +1270,28 @@ function focusCampaign(country, campaign) {
 }
 
 function bindEvents() {
-  $('adFileInput').addEventListener('change', event => importAds(event.target.files));
+  $('adFileInput').addEventListener('change', async event => {
+    try { await importAds(event.target.files); } finally { event.target.value = ''; }
+  });
+  const commerceFileInput = $('commerceFileInput');
+  $('commerceUploadButton').addEventListener('click', () => {
+    // Reset before opening the picker so selecting the same report after clearing data fires change again.
+    commerceFileInput.value = '';
+    commerceFileInput.click();
+  });
+  commerceFileInput.addEventListener('change', async event => {
+    try {
+      await importCommerceAds(event.target.files);
+    } finally {
+      // Permit consecutive imports of the same B2C report without requiring a page refresh.
+      event.target.value = '';
+    }
+  });
   $('leadFileInput').addEventListener('change', event => prepareLeads(event.target.files));
   bindDrop('adDropZone', importAds);
+  bindDrop('b2cAdDropZone', async files => {
+    try { await importCommerceAds(files); } catch { /* importCommerceAds reports user-facing errors */ }
+  });
   bindDrop('leadDropZone', prepareLeads);
 
   ['countryFilter', 'campaignFilter'].forEach(id => $(id).addEventListener('change', refreshForFilterChange));
@@ -715,7 +1300,30 @@ function bindEvents() {
     $('countryFilter').value = '';
     $('campaignFilter').value = '';
     $('searchInput').value = '';
+    resetDateRange();
     refreshForFilterChange();
+  });
+
+  $('rangeText').addEventListener('click', openDateRangePicker);
+  $('rangeText').addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openDateRangePicker();
+    }
+  });
+  $('closeDateRange').addEventListener('click', closeDateRangePicker);
+  $('cancelDateRangeButton').addEventListener('click', closeDateRangePicker);
+  $('applyDateRangeButton').addEventListener('click', applyDateRange);
+  $('dateRangeStart').addEventListener('change', () => { $('dateRangeError').textContent = ''; });
+  $('dateRangeEnd').addEventListener('change', () => { $('dateRangeError').textContent = ''; });
+  $('dateRangeQuickOptions').addEventListener('click', event => {
+    const button = event.target.closest('[data-date-range-preset]');
+    if (!button) return;
+    const preset = getDateRangePresets(dateStateForMode().available).find(item => item.key === button.dataset.dateRangePreset);
+    if (!preset) return;
+    $('dateRangeStart').value = preset.range.startDate;
+    $('dateRangeEnd').value = preset.range.endDate;
+    $('dateRangeError').textContent = '';
   });
 
   $('guideButton').addEventListener('click', () => $('guideModal').classList.add('open'));
@@ -724,8 +1332,11 @@ function bindEvents() {
   $('cancelMappingButton').addEventListener('click', () => $('mappingModal').classList.remove('open'));
   $('viewAllAdviceButton').addEventListener('click', () => { state.adviceFilter = 'all'; renderAdviceModal(); $('adviceModal').classList.add('open'); });
   $('closeAdvice').addEventListener('click', () => $('adviceModal').classList.remove('open'));
-  ['guideModal', 'mappingModal', 'adviceModal'].forEach(id => $(id).addEventListener('click', event => {
-    if (event.target === $(id)) $(id).classList.remove('open');
+  $('closeCommerceDetail').addEventListener('click', closeCommerceDetail);
+  ['guideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal', 'dateRangeModal'].forEach(id => $(id).addEventListener('click', event => {
+    if (event.target !== $(id)) return;
+    if (id === 'dateRangeModal') closeDateRangePicker();
+    else $(id).classList.remove('open');
   }));
   $('adviceFilterBar').addEventListener('click', event => {
     const button = event.target.closest('[data-advice-filter]');
@@ -743,6 +1354,9 @@ function bindEvents() {
     renderDashboard();
   });
   $('applyMappingButton').addEventListener('click', applyLeadMapping);
+  $('applyAdImportMappingButton').addEventListener('click', applyAdImportMapping);
+  $('cancelAdImportMappingButton').addEventListener('click', closeAdImportMappingPreview);
+  $('closeAdImportMapping').addEventListener('click', closeAdImportMappingPreview);
 
   $('adviceList').addEventListener('click', event => {
     const button = event.target.closest('[data-risk-filter]');
@@ -815,13 +1429,12 @@ function bindEvents() {
     if (!button) return;
     const key = button.dataset.listToggle;
     if (!Object.hasOwn(state.expandedLists, key)) return;
-    const wasExpanded = state.expandedLists[key];
-    state.expandedLists[key] = !wasExpanded;
-    renderDashboard();
-    if (wasExpanded) {
-      const moduleIds = { risks: 'riskCenter', countryQuality: 'countryQualityCard', campaigns: 'campaignRankingCard' };
-      requestAnimationFrame(() => $(moduleIds[key])?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-    }
+    event.preventDefault();
+    event.stopPropagation();
+    state.expandedLists[key] = !state.expandedLists[key];
+    // Only refresh the affected B2B list modules. The prior full-dashboard
+    // re-render plus scrollIntoView caused collapse/expand to jump the page.
+    renderB2BListModules();
   });
   $('stopPanel').addEventListener('click', event => {
     const button = event.target.closest('[data-stop-action]');
@@ -848,29 +1461,113 @@ function bindEvents() {
   $('exportStopButton').addEventListener('click', () => exportDiagnostics(true));
   $('demoButton').addEventListener('click', loadDemo);
   $('clearDataButton').addEventListener('click', clearData);
+  $('clearCommerceDataButton').addEventListener('click', openCommerceClearConfirm);
+  $('confirmClearCommerceDataButton').addEventListener('click', clearCommerceData);
+  $('cancelClearCommerceDataButton').addEventListener('click', closeCommerceClearConfirm);
+  $('cancelClearCommerceDataButtonSecondary').addEventListener('click', closeCommerceClearConfirm);
   $('saveRulesButton').addEventListener('click', saveRules);
   $('resetRulesButton').addEventListener('click', resetRules);
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));
+  $('ecommerceView').addEventListener('click', event => {
+    const detailButton = event.target.closest('[data-commerce-detail-id]');
+    if (detailButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      openCommerceDetail(detailButton.dataset.commerceDetailId);
+      return;
+    }
+    const actionButton = event.target.closest('[data-commerce-action]');
+    if (actionButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveCommerceAction(actionButton.dataset.commerceActionId, actionButton.dataset.commerceAction);
+      renderCommerceAnalysisOnly();
+      return;
+    }
+    const listButton = event.target.closest('[data-commerce-list-toggle]');
+    if (listButton) {
+      const key = listButton.dataset.commerceListToggle;
+      if (!Object.hasOwn(state.commerceExpanded, key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (key === 'risks') advanceCommerceRiskDetailRows();
+      else state.commerceExpanded[key] = !state.commerceExpanded[key];
+      if (key === 'advice') renderCommerceAdviceOnly();
+      else renderCommerceAnalysisOnly();
+      return;
+    }
+    const trendButton = event.target.closest('[data-commerce-trend]');
+    if (trendButton) {
+      state.commerceTrendMetric = trendButton.dataset.commerceTrend;
+      renderCommerceTrend(selectedAds(), state.commerceTrendMetric);
+      return;
+    }
+    const riskButton = event.target.closest('[data-commerce-risk-filter]');
+    if (riskButton) {
+      state.commerceRiskFilter = riskButton.dataset.commerceRiskFilter;
+      state.commerceRiskVisibleCount = LIST_LIMIT;
+      renderCommerceAnalysisOnly();
+      return;
+    }
+    const sortButton = event.target.closest('[data-commerce-sort]');
+    if (sortButton) {
+      const [group, metric] = String(sortButton.dataset.commerceSort || '').split(':');
+      if (!Object.hasOwn(state.commerceSort, group) || !metric) return;
+      state.commerceSort[group] = metric;
+      state.commerceExpanded[group] = false;
+      renderCommerceAnalysisOnly();
+    }
+  });
+  $('commerceDetailActions').addEventListener('click', event => {
+    const actionButton = event.target.closest('[data-commerce-action]');
+    if (!actionButton) return;
+    event.preventDefault();
+    event.stopPropagation();
+    saveCommerceAction(actionButton.dataset.commerceActionId, actionButton.dataset.commerceAction);
+    renderCommerceAnalysisOnly();
+    const detail = getCommerceDetail($('commerceDetailActions').dataset.commerceDetailId || '');
+    if (detail) renderCommerceDetailModal(detail);
+    else closeCommerceDetail();
+  });
 
-  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-view]');
+    if (button) switchView(button.dataset.view);
+  });
   document.querySelector('.menu-icon').addEventListener('click', () => document.body.classList.toggle('nav-open'));
 }
 
 function init() {
-  state.rules = loadRules();
+  const savedRules = loadRules();
+  state.rules = savedRules.b2b;
+  state.commerceRules = savedRules.b2c;
+  state.commerceStopHits = loadCommerceStopHits();
+  document.body.dataset.businessMode = state.businessMode;
   state.actions = loadActions(ACTION_SCOPE);
+  state.commerceActions = loadActions(COMMERCE_ACTION_SCOPE);
   renderRulesForm();
+  placeSharedFilterBar();
+  document.querySelectorAll('button[data-business-mode]').forEach(button => button.classList.toggle('active', button.dataset.businessMode === state.businessMode));
   populateFilters();
   dateRange();
   renderDashboard();
   bindEvents();
+  // Restore the persisted business mode's view on a fresh load. Without this,
+  // a saved B2C mode could render B2C data into hidden hosts while the B2B
+  // dashboard view remained active on screen.
+  switchView(state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? 'ecommerce' : 'dashboard');
 
   // 导入按钮必须立即可用；本机历史数据在后台恢复，避免本地存储异常时阻塞文件选择。
   loadDashboardData().then(saved => {
-    if (state.changedSinceStartup || !saved || !Array.isArray(saved.ads) || !saved.ads.length) return;
-    state.ads = saved.ads;
+    if (state.changedSinceStartup || !saved || (!Array.isArray(saved.ads) || !saved.ads.length) && (!Array.isArray(saved.commerceAds) || !saved.commerceAds.length)) return;
+    state.ads = Array.isArray(saved.ads) ? saved.ads : [];
+    state.commerceAds = Array.isArray(saved.commerceAds) ? saved.commerceAds : [];
     state.leads = Array.isArray(saved.leads) ? saved.leads : [];
     state.matches = Array.isArray(saved.matches) ? saved.matches : [];
     state.source = saved.source || 'Meta Excel';
+    state.commerceSource = saved.commerceSource || '未导入';
+    setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
+    setAvailableDateRange(BUSINESS_MODE.B2C_ECOMMERCE, { resetSelection: true });
     populateFilters();
     dateRange();
     renderDashboard();

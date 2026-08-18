@@ -1328,12 +1328,14 @@ function bindEvents() {
 
   $('guideButton').addEventListener('click', () => $('guideModal').classList.add('open'));
   $('closeGuide').addEventListener('click', () => $('guideModal').classList.remove('open'));
+  $('commerceGuideButton').addEventListener('click', () => $('commerceGuideModal').classList.add('open'));
+  $('closeCommerceGuide').addEventListener('click', () => $('commerceGuideModal').classList.remove('open'));
   $('closeMapping').addEventListener('click', () => $('mappingModal').classList.remove('open'));
   $('cancelMappingButton').addEventListener('click', () => $('mappingModal').classList.remove('open'));
   $('viewAllAdviceButton').addEventListener('click', () => { state.adviceFilter = 'all'; renderAdviceModal(); $('adviceModal').classList.add('open'); });
   $('closeAdvice').addEventListener('click', () => $('adviceModal').classList.remove('open'));
   $('closeCommerceDetail').addEventListener('click', closeCommerceDetail);
-  ['guideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal', 'dateRangeModal'].forEach(id => $(id).addEventListener('click', event => {
+  ['guideModal', 'commerceGuideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal', 'dateRangeModal'].forEach(id => $(id).addEventListener('click', event => {
     if (event.target !== $(id)) return;
     if (id === 'dateRangeModal') closeDateRangePicker();
     else $(id).classList.remove('open');

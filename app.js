@@ -9,6 +9,7 @@ import { downloadCsv } from './export.js';
 import { loadActions, saveActions, saveDashboardData, loadDashboardData } from './storage.js';
 import { commerceDiagnostics } from './commerce-diagnosis.js';
 import { getCommerceDetail, renderCommerceAnalysisModules, renderCommerceAdvice, renderCommerceDashboard, renderCommerceRulesForm, renderCommerceTrend, renderFunnelPage } from './commerce-ui.js';
+import { clampDateRange, filterAdsByDateRange, formatDateRange, getAvailableDateRange, getDateRangePresets, isValidDateRange } from './date-range.js';
 
 const $ = id => document.getElementById(id);
 const RULES_KEY = 'personal-ads-intelligence-rules-v1';
@@ -56,6 +57,11 @@ const state = {
   pendingAdImport: null,
   source: '未导入',
   commerceSource: '未导入',
+  dateRanges: {
+    b2b: { available: { minDate: null, maxDate: null }, selected: { startDate: null, endDate: null } },
+    b2c: { available: { minDate: null, maxDate: null }, selected: { startDate: null, endDate: null } }
+  },
+  pendingDateRange: null,
   adviceFilter: 'all',
   riskFilter: 'all',
   expandedLists: { risks: false, countryQuality: false, campaigns: false },
@@ -145,20 +151,106 @@ function activeAds() {
   return state.businessMode === BUSINESS_MODE.B2C_ECOMMERCE ? state.commerceAds : state.ads;
 }
 
+function dateModeKey(mode = state.businessMode) {
+  return mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'b2c' : 'b2b';
+}
+
+function dateStateForMode(mode = state.businessMode) {
+  return state.dateRanges[dateModeKey(mode)];
+}
+
 function selectedAds() {
   const country = $('countryFilter').value;
   const campaign = $('campaignFilter').value;
   const search = $('searchInput').value.trim().toLowerCase();
-  return activeAds().filter(ad => (
+  const dateState = dateStateForMode();
+  const dateFiltered = filterAdsByDateRange(activeAds(), dateState.selected);
+  return dateFiltered.filter(ad => (
     (!country || ad.country === country)
     && (!campaign || ad.campaign === campaign)
     && (!search || `${ad.country} ${ad.campaign} ${ad.adSet} ${ad.ad} ${ad.creative}`.toLowerCase().includes(search))
   ));
 }
 
+function setAvailableDateRange(mode = state.businessMode, { resetSelection = false } = {}) {
+  const key = dateModeKey(mode);
+  const source = mode === BUSINESS_MODE.B2C_ECOMMERCE ? state.commerceAds : state.ads;
+  const available = getAvailableDateRange(source);
+  const current = state.dateRanges[key];
+  current.available = available;
+  current.selected = available.minDate && available.maxDate
+    ? (resetSelection || !current.selected.startDate || !current.selected.endDate
+      ? { startDate: available.minDate, endDate: available.maxDate }
+      : clampDateRange(current.selected, available))
+    : { startDate: null, endDate: null };
+}
+
 function dateRange() {
-  const dates = activeAds().flatMap(ad => [ad.dateStart, ad.dateEnd]).filter(Boolean).sort();
-  $('rangeText').value = dates.length ? `${dates[0]} 至 ${dates[dates.length - 1]}` : '未识别报告日期';
+  const dateState = dateStateForMode();
+  const hasData = activeAds().length > 0;
+  const emptyLabel = hasData ? '无日期数据' : '未识别报告日期';
+  const rangeText = $('rangeText');
+  rangeText.value = formatDateRange(dateState.selected, emptyLabel);
+  rangeText.disabled = !dateState.available.minDate || !dateState.available.maxDate;
+  rangeText.setAttribute('aria-disabled', String(rangeText.disabled));
+  if (!rangeText.disabled) {
+    rangeText.min = dateState.available.minDate;
+    rangeText.max = dateState.available.maxDate;
+  } else {
+    rangeText.removeAttribute('min');
+    rangeText.removeAttribute('max');
+  }
+  const availableText = $('dateRangeAvailableText');
+  if (availableText) availableText.textContent = dateState.available.minDate
+    ? `可分析日期：${dateState.available.minDate} 至 ${dateState.available.maxDate}`
+    : emptyLabel;
+}
+
+function openDateRangePicker() {
+  const dateState = dateStateForMode();
+  if (!dateState.available.minDate || !dateState.available.maxDate) return;
+  state.pendingDateRange = { ...dateState.selected };
+  $('dateRangeStart').value = state.pendingDateRange.startDate || dateState.available.minDate;
+  $('dateRangeEnd').value = state.pendingDateRange.endDate || dateState.available.maxDate;
+  $('dateRangeStart').min = dateState.available.minDate;
+  $('dateRangeStart').max = dateState.available.maxDate;
+  $('dateRangeEnd').min = dateState.available.minDate;
+  $('dateRangeEnd').max = dateState.available.maxDate;
+  $('dateRangeError').textContent = '';
+  const presets = getDateRangePresets(dateState.available);
+  $('dateRangeQuickOptions').innerHTML = presets.map(item => `<button type="button" class="btn soft date-range-quick" data-date-range-preset="${item.key}">${item.label}</button>`).join('');
+  $('dateRangeModal').classList.add('open');
+}
+
+function closeDateRangePicker() {
+  $('dateRangeModal').classList.remove('open');
+  state.pendingDateRange = null;
+}
+
+function applyDateRange() {
+  const dateState = dateStateForMode();
+  const range = { startDate: $('dateRangeStart').value, endDate: $('dateRangeEnd').value };
+  if (!isValidDateRange(range, dateState.available)) {
+    $('dateRangeError').textContent = '请选择数据范围以内的日期，并确保结束日期不早于开始日期。';
+    return;
+  }
+  dateState.selected = range;
+  closeDateRangePicker();
+  resetExpandedLists();
+  resetDetailCharts();
+  dateRange();
+  renderDashboard();
+  toast(`已应用分析日期：${formatDateRange(range)}`);
+}
+
+function resetDateRange() {
+  const dateState = dateStateForMode();
+  if (dateState.available.minDate && dateState.available.maxDate) {
+    dateState.selected = { startDate: dateState.available.minDate, endDate: dateState.available.maxDate };
+  } else {
+    dateState.selected = { startDate: null, endDate: null };
+  }
+  dateRange();
 }
 
 function populateFilters() {
@@ -903,6 +995,7 @@ async function loadDemo() {
   state.leads = [];
   state.matches = [];
   state.source = '演示数据';
+  setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
   populateFilters();
   dateRange();
   recordCommerceDiagnosticPass();
@@ -919,6 +1012,7 @@ async function clearData() {
   state.leads = [];
   state.matches = [];
   state.source = '未导入';
+  setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
   populateFilters();
   dateRange();
   const saved = await persistImportedData();
@@ -942,6 +1036,7 @@ async function clearCommerceData() {
   state.commerceAds = [];
   state.commerceSource = '未导入';
   state.commerceStopHits = {};
+  setAvailableDateRange(BUSINESS_MODE.B2C_ECOMMERCE, { resetSelection: true });
   persistCommerceStopHits();
   state.commerceActions = {};
   saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
@@ -1100,6 +1195,7 @@ async function applyAdImportMapping() {
       resetExpandedLists();
       resetDetailCharts();
     }
+    setAvailableDateRange(pending.mode, { resetSelection: true });
     populateFilters();
     dateRange();
     recordCommerceDiagnosticPass();
@@ -1204,7 +1300,30 @@ function bindEvents() {
     $('countryFilter').value = '';
     $('campaignFilter').value = '';
     $('searchInput').value = '';
+    resetDateRange();
     refreshForFilterChange();
+  });
+
+  $('rangeText').addEventListener('click', openDateRangePicker);
+  $('rangeText').addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openDateRangePicker();
+    }
+  });
+  $('closeDateRange').addEventListener('click', closeDateRangePicker);
+  $('cancelDateRangeButton').addEventListener('click', closeDateRangePicker);
+  $('applyDateRangeButton').addEventListener('click', applyDateRange);
+  $('dateRangeStart').addEventListener('change', () => { $('dateRangeError').textContent = ''; });
+  $('dateRangeEnd').addEventListener('change', () => { $('dateRangeError').textContent = ''; });
+  $('dateRangeQuickOptions').addEventListener('click', event => {
+    const button = event.target.closest('[data-date-range-preset]');
+    if (!button) return;
+    const preset = getDateRangePresets(dateStateForMode().available).find(item => item.key === button.dataset.dateRangePreset);
+    if (!preset) return;
+    $('dateRangeStart').value = preset.range.startDate;
+    $('dateRangeEnd').value = preset.range.endDate;
+    $('dateRangeError').textContent = '';
   });
 
   $('guideButton').addEventListener('click', () => $('guideModal').classList.add('open'));
@@ -1214,8 +1333,10 @@ function bindEvents() {
   $('viewAllAdviceButton').addEventListener('click', () => { state.adviceFilter = 'all'; renderAdviceModal(); $('adviceModal').classList.add('open'); });
   $('closeAdvice').addEventListener('click', () => $('adviceModal').classList.remove('open'));
   $('closeCommerceDetail').addEventListener('click', closeCommerceDetail);
-  ['guideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal'].forEach(id => $(id).addEventListener('click', event => {
-    if (event.target === $(id)) $(id).classList.remove('open');
+  ['guideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal', 'dateRangeModal'].forEach(id => $(id).addEventListener('click', event => {
+    if (event.target !== $(id)) return;
+    if (id === 'dateRangeModal') closeDateRangePicker();
+    else $(id).classList.remove('open');
   }));
   $('adviceFilterBar').addEventListener('click', event => {
     const button = event.target.closest('[data-advice-filter]');
@@ -1445,6 +1566,8 @@ function init() {
     state.matches = Array.isArray(saved.matches) ? saved.matches : [];
     state.source = saved.source || 'Meta Excel';
     state.commerceSource = saved.commerceSource || '未导入';
+    setAvailableDateRange(BUSINESS_MODE.B2B_LEAD, { resetSelection: true });
+    setAvailableDateRange(BUSINESS_MODE.B2C_ECOMMERCE, { resetSelection: true });
     populateFilters();
     dateRange();
     renderDashboard();

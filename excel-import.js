@@ -140,27 +140,32 @@ async function readNativeXlsx(file) {
   return sheets;
 }
 
-function legacyWorkbookSheets(file) {
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onload = event => {
-      try {
-        if (!window.XLSX) { resolve([]); return; }
-        const workbook = XLSX.read(event.target.result, { type: 'array' });
-        resolve(workbook.SheetNames.map(name => ({ name, rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: true }) })));
-      } catch { resolve([]); }
-    };
-    reader.onerror = () => resolve([]);
-    reader.readAsArrayBuffer(file);
-  });
+async function readSheetJsWorkbook(file) {
+  if (!globalThis.XLSX) throw new Error('Excel 解析组件未加载，请刷新页面后重试。');
+  try {
+    const workbook = globalThis.XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+    if (!workbook.SheetNames?.length) throw new Error('Excel Sheet 为空。');
+    return workbook.SheetNames.map(name => ({
+      name,
+      rows: globalThis.XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', raw: true })
+    }));
+  } catch (error) {
+    if (error?.message?.includes('为空')) throw error;
+    throw new Error('Excel 文件无法解析，请确认文件未损坏。');
+  }
 }
 
 export async function readWorkbookSheets(file) {
-  if (/\.csv$/i.test(file.name)) return [{ name: 'CSV', rows: parseCsvText(String(await file.text()).replace(/^\uFEFF/, '')) }];
-  if (/\.xlsx$/i.test(file.name)) {
-    try { return await readNativeXlsx(file); } catch { return legacyWorkbookSheets(file); }
+  if (/\.csv$/i.test(file.name)) {
+    const text = String(await file.text()).replace(/^\uFEFF/, '');
+    if (!text.trim()) throw new Error('文件为空。');
+    return [{ name: 'CSV', rows: parseCsvText(text) }];
   }
-  return legacyWorkbookSheets(file);
+  if (/\.xlsx$/i.test(file.name)) {
+    try { return await readNativeXlsx(file); } catch { return readSheetJsWorkbook(file); }
+  }
+  if (/\.xls$/i.test(file.name)) return readSheetJsWorkbook(file);
+  throw new Error('不支持的文件格式。');
 }
 
 export async function readSpreadsheetRows(file) {

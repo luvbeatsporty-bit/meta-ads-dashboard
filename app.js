@@ -977,26 +977,45 @@ async function importAds(files) {
   toast(`已导入 ${ads.length} 条广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
 }
 
+function commerceImportErrorMessage(error) {
+  const message = String(error?.message || '').trim();
+  if (/empty|为空/i.test(message)) return 'B2C 广告报表导入失败：文件为空。';
+  if (/xlsx|workbook|zip|excel/i.test(message)) return 'B2C 广告报表导入失败：Excel 文件无法解析，请确认文件未损坏。';
+  return `B2C 广告报表导入失败${message ? `：${message}` : '，请检查文件格式和内容。'}`;
+}
+
 async function importCommerceAds(files) {
-  const selected = [...files];
-  if (selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) { toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。'); return; }
-  const usable = selected.filter(file => /\.(xlsx|csv)$/i.test(file.name));
-  if (!usable.length) { toast('请选择 .xlsx 或 .csv 格式的 B2C 广告报表。'); return; }
-  markDataChanged();
-  const ads = await importAdFiles(usable);
-  if (!ads.length) {
-    toast('未识别到可分析的 B2C 电商字段。请检查报表表头。');
+  const selected = [...(files || [])];
+  if (!selected.length) return;
+  const usable = selected.filter(file => /\.(xlsx|xls|csv)$/i.test(file.name));
+  if (!usable.length) {
+    toast('B2C 广告报表导入失败：仅支持 .xlsx、.xls 或 .csv 文件。');
     return;
   }
-  state.commerceAds = ads;
-  state.commerceSource = 'B2C Meta Excel';
-  populateFilters();
-  dateRange();
-  recordCommerceDiagnosticPass();
-  const saved = await persistImportedData();
-  resetExpandedLists();
-  renderDashboard();
-  toast(`已导入 ${ads.length} 条 B2C 广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  if (usable.some(file => !file.size)) {
+    toast('B2C 广告报表导入失败：文件为空。');
+    return;
+  }
+  try {
+    markDataChanged();
+    const ads = await importAdFiles(usable);
+    if (!ads.length) {
+      toast('B2C 广告报表导入失败：未识别到 Spend、Purchase、Impressions 等可分析字段，请检查报表表头。');
+      return;
+    }
+    state.commerceAds = ads;
+    state.commerceSource = `B2C Meta ${usable.every(file => /\.csv$/i.test(file.name)) ? 'CSV' : 'Excel'}`;
+    populateFilters();
+    dateRange();
+    recordCommerceDiagnosticPass();
+    const saved = await persistImportedData();
+    resetCommerceViewState();
+    renderDashboard();
+    toast(`已导入 ${ads.length} 条 B2C 广告记录${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  } catch (error) {
+    console.error('B2C 广告报表导入失败', error);
+    toast(commerceImportErrorMessage(error));
+  }
 }
 
 async function prepareLeads(files) {
@@ -1041,10 +1060,25 @@ function focusCampaign(country, campaign) {
 
 function bindEvents() {
   $('adFileInput').addEventListener('change', event => importAds(event.target.files));
-  $('b2cAdFileInput').addEventListener('change', event => importCommerceAds(event.target.files));
+  const commerceFileInput = $('commerceFileInput');
+  $('commerceUploadButton').addEventListener('click', () => {
+    // Reset before opening the picker so selecting the same report after clearing data fires change again.
+    commerceFileInput.value = '';
+    commerceFileInput.click();
+  });
+  commerceFileInput.addEventListener('change', async event => {
+    try {
+      await importCommerceAds(event.target.files);
+    } finally {
+      // Permit consecutive imports of the same B2C report without requiring a page refresh.
+      event.target.value = '';
+    }
+  });
   $('leadFileInput').addEventListener('change', event => prepareLeads(event.target.files));
   bindDrop('adDropZone', importAds);
-  bindDrop('b2cAdDropZone', importCommerceAds);
+  bindDrop('b2cAdDropZone', async files => {
+    try { await importCommerceAds(files); } catch { /* importCommerceAds reports user-facing errors */ }
+  });
   bindDrop('leadDropZone', prepareLeads);
 
   ['countryFilter', 'campaignFilter'].forEach(id => $(id).addEventListener('change', refreshForFilterChange));

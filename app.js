@@ -240,11 +240,21 @@ function filteredRiskItems(items) {
   return state.riskFilter === 'all' ? items : items.filter(item => item.d.level === state.riskFilter);
 }
 
-function resetExpandedLists() {
+function resetB2BViewState() {
   state.expandedLists = { risks: false, countryQuality: false, campaigns: false };
+}
+
+function resetCommerceViewState() {
   state.commerceExpanded = { advice: false, risks: false, countries: false, campaigns: false, creatives: false };
   state.commerceRiskVisibleCount = LIST_LIMIT;
   state.commerceRiskFilter = 'all';
+  state.commerceSort = { countries: 'spend', campaigns: 'spend', creatives: 'spend' };
+  state.commerceTrendMetric = 'spend';
+}
+
+function resetExpandedLists() {
+  resetB2BViewState();
+  resetCommerceViewState();
 }
 
 function resetDetailCharts() {
@@ -908,10 +918,38 @@ async function clearData() {
   populateFilters();
   dateRange();
   const saved = await persistImportedData();
-  resetExpandedLists();
+  resetB2BViewState();
   resetDetailCharts();
   renderDashboard();
   toast(saved ? '已清除 B2B 广告与 Lead 数据；B2C 数据保持不变' : '已清除 B2B 广告与 Lead 数据');
+}
+
+function openCommerceClearConfirm() {
+  $('clearCommerceDataModal')?.classList.add('open');
+}
+
+function closeCommerceClearConfirm() {
+  $('clearCommerceDataModal')?.classList.remove('open');
+}
+
+async function clearCommerceData() {
+  closeCommerceClearConfirm();
+  markDataChanged();
+  state.commerceAds = [];
+  state.commerceSource = '未导入';
+  state.commerceStopHits = {};
+  persistCommerceStopHits();
+  state.commerceActions = {};
+  saveActions(COMMERCE_ACTION_SCOPE, state.commerceActions);
+  $('countryFilter').value = '';
+  $('campaignFilter').value = '';
+  $('searchInput').value = '';
+  resetCommerceViewState();
+  populateFilters();
+  dateRange();
+  const saved = await persistImportedData();
+  renderDashboard();
+  toast(saved ? '已清除 B2C 广告数据；B2B 数据和规则设置保持不变' : '已清除 B2C 广告数据；B2B 数据和规则设置保持不变');
 }
 
 async function importAds(files) {
@@ -1148,6 +1186,10 @@ function bindEvents() {
   $('exportStopButton').addEventListener('click', () => exportDiagnostics(true));
   $('demoButton').addEventListener('click', loadDemo);
   $('clearDataButton').addEventListener('click', clearData);
+  $('clearCommerceDataButton').addEventListener('click', openCommerceClearConfirm);
+  $('confirmClearCommerceDataButton').addEventListener('click', clearCommerceData);
+  $('cancelClearCommerceDataButton').addEventListener('click', closeCommerceClearConfirm);
+  $('cancelClearCommerceDataButtonSecondary').addEventListener('click', closeCommerceClearConfirm);
   $('saveRulesButton').addEventListener('click', saveRules);
   $('resetRulesButton').addEventListener('click', resetRules);
   document.querySelectorAll('button[data-business-mode]').forEach(button => button.addEventListener('click', () => switchBusinessMode(button.dataset.businessMode)));

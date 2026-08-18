@@ -646,3 +646,18 @@ body[data-business-mode="b2c-commerce"] .b2c-rules-only { display: grid; }
 .commerce-action-links .small-btn { white-space: nowrap; }
 .commerce-detail-actions { justify-content: flex-end; }
 @media (max-width: 760px) { .commerce-detail-context { grid-template-columns: 1fr; }.commerce-detail-modal { padding: 18px; }.commerce-action-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Shared B2B/B2C import mapping preview. It intentionally reuses the existing
+   modal, labels and form controls rather than introducing a new dashboard UI. */
+.ad-import-mapping-box { width: min(800px, calc(100vw - 36px)); }
+.ad-import-mapping-summary { margin: 12px 0; color: #44536d; font-size: 12px; font-weight: 700; }
+.ad-import-mapping-section { margin-top: 16px; }
+.ad-import-mapping-section h3 { margin: 0 0 8px; color: #36435e; font-size: 13px; }
+.ad-import-mapping-list { display: grid; gap: 7px; max-height: 180px; overflow: auto; }
+.ad-import-mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .85fr); align-items: center; gap: 12px; padding: 10px 11px; border: 1px solid #e7ecf4; border-radius: 10px; background: #fbfcff; }
+.ad-import-mapping-row b { display: block; overflow: hidden; color: #34415c; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ad-import-mapping-row small { display: block; margin-top: 3px; overflow: hidden; color: #8490a4; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.ad-import-mapping-row select { width: 100%; margin: 0; }
+.ad-import-mapping-status { display: block; color: #27856c; font-size: 11px; font-weight: 800; }
+.ad-import-mapping-status.unused { color: #8893a5; }
+@media (max-width: 620px) { .ad-import-mapping-row { grid-template-columns: 1fr; gap: 7px; } .ad-import-mapping-list { max-height: 220px; } }

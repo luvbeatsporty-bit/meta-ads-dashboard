@@ -1,4 +1,5 @@
-import { AD_ALIASES, AD_METRIC_KEYS, createAdRecord, findAliasKey, toDate, toOptionalNumber } from './data-model.js';
+import { AD_METRIC_KEYS, createAdRecord, toDate, toOptionalNumber } from './data-model.js';
+import { applyMappingOverrides, buildHeaderMapping, confirmedMetricKeys } from './field-mapper.js';
 import { extractMetaConversionAvailability, extractMetaConversions } from './commerce-mapping.js';
 
 export function parseCsvText(text) {
@@ -85,7 +86,8 @@ function entryText(entries, path) {
 }
 
 function normalizeZipPath(target = '') {
-  const chunks = ['xl', ...String(target).replace(/^\//, '').split('/')];
+  const raw = String(target).replace(/^\/+/, '');
+  const chunks = [raw.startsWith('xl/') ? raw : `xl/${raw}`].join('/').split('/');
   const normalized = [];
   chunks.forEach(chunk => {
     if (!chunk || chunk === '.') return;
@@ -173,22 +175,48 @@ export async function readSpreadsheetRows(file) {
   return sheets[0]?.rows || [];
 }
 
-function findHeader(rows) {
-  for (let rowIndex = 0; rowIndex < Math.min(rows.length, 15); rowIndex += 1) {
-    const found = rows[rowIndex].filter(value => findAliasKey(value, AD_ALIASES)).length;
-    if (found >= 1) return rowIndex;
+function analyseSheet(rows = [], fileName = '', sheetName = '') {
+  let best = null;
+  const limit = Math.min(rows.length, 15);
+  for (let rowIndex = 0; rowIndex < limit; rowIndex += 1) {
+    const headers = rows[rowIndex] || [];
+    if (!headers.some(value => String(value ?? '').trim())) continue;
+    const sampleRows = rows.slice(rowIndex + 1, rowIndex + 21);
+    const mapping = buildHeaderMapping(headers, { sampleRows, sheetId: `${fileName}::${sheetName}::${rowIndex}` });
+    const score = mapping.filter(item => item.status !== 'unused').length;
+    if (!best || score > best.score) best = { headerIndex: rowIndex, headers, mapping, score };
   }
-  return -1;
+  return best?.score ? best : { headerIndex: -1, headers: [], mapping: [], score: 0 };
 }
 
-export function parseAdRows(rows, fileName = '', sheetName = '') {
+function planForRows(rows, fileName, sheetName, mapping) {
+  if (mapping?.length) {
+    const headerIndex = mapping[0]?.headerIndex;
+    return { headerIndex: Number.isInteger(headerIndex) ? headerIndex : analyseSheet(rows, fileName, sheetName).headerIndex, mapping };
+  }
+  const analysis = analyseSheet(rows, fileName, sheetName);
+  return { headerIndex: analysis.headerIndex, mapping: analysis.mapping };
+}
+
+export function previewAdRows(rows, fileName = '', sheetName = '') {
+  const analysis = analyseSheet(rows, fileName, sheetName);
+  const mapping = analysis.mapping.map(item => ({ ...item, headerIndex: analysis.headerIndex }));
+  return {
+    fileName, sheetName, rows, headerIndex: analysis.headerIndex, headers: analysis.headers,
+    mapping, recognisedColumns: mapping.filter(item => item.status !== 'unused').length,
+    confirmedColumns: confirmedMetricKeys(mapping).length
+  };
+}
+
+export function parseAdRows(rows, fileName = '', sheetName = '', options = {}) {
   const all = [];
-  const headerIndex = findHeader(rows);
+  const fallback = previewAdRows(rows, fileName, sheetName);
+  const headerIndex = options.mapping?.[0]?.headerIndex ?? fallback.headerIndex;
   if (headerIndex < 0) return all;
+  const mapping = applyMappingOverrides(options.mapping || fallback.mapping, options.overrides || {});
   const map = {};
-  rows[headerIndex].forEach((value, index) => {
-    const key = findAliasKey(value, AD_ALIASES);
-    if (key && map[key] === undefined) map[key] = index;
+  mapping.forEach(item => {
+    if (item.status === 'confirmed' && item.internalKey && map[item.internalKey] === undefined) map[item.internalKey] = item.index;
   });
   if (!Object.keys(map).length) return all;
   const mappedKeys = Object.keys(map);
@@ -218,7 +246,7 @@ export function parseAdRows(rows, fileName = '', sheetName = '') {
     const percent = key => { const value = numeric(row, key); return value === null ? null : value / (String(get(row, key)).includes('%') ? 100 : 1); };
     const ad = createAdRecord({
       date: toDate(get(row, 'date') || get(row, 'dateStart')),
-      platform: String(get(row, 'platform') || 'Meta').trim(), country, product: String(get(row, 'product') || '').trim(),
+      platform: String(get(row, 'platform') || 'Meta').trim(), country, region: String(get(row, 'region') || '').trim(), product: String(get(row, 'product') || '').trim(),
       accountId: String(get(row, 'accountId') || '').trim(), accountName: String(get(row, 'accountName') || '').trim(), campaignId: String(get(row, 'campaignId') || '').trim(), campaign,
       adSetId: String(get(row, 'adSetId') || '').trim(), adSet: String(get(row, 'adSet') || '').trim(), adId: String(get(row, 'adId') || '').trim(), ad: String(get(row, 'ad') || '').trim(),
       creative: String(get(row, 'creative') || '').trim(), creativeType: String(get(row, 'creativeType') || '').trim(), audienceType: String(get(row, 'audienceType') || '').trim(), placement: String(get(row, 'placement') || '').trim(), status: String(get(row, 'status') || '').trim(),
@@ -228,6 +256,8 @@ export function parseAdRows(rows, fileName = '', sheetName = '') {
       lpvRate: percent('lpvRate'), atcRate: percent('atcRate'), checkoutRate: percent('checkoutRate'), checkoutCompletionRate: percent('checkoutCompletionRate'), purchaseCvr: percent('purchaseCvr'),
       ...conversionValues, roas: numeric(row, 'roas'), cpa: numeric(row, 'cpa'), aov: numeric(row, 'aov'),
       formOpens: numeric(row, 'formOpens'), formSubmits: numeric(row, 'formSubmits'), results: numeric(row, 'results'), costPerResult: numeric(row, 'costPerResult'),
+      leadConversionRate: percent('leadConversionRate'), validLeads: numeric(row, 'validLeads'), invalidLeads: numeric(row, 'invalidLeads'), validLeadRate: percent('validLeadRate'), validLeadCpl: numeric(row, 'validLeadCpl'),
+      contactedLeads: numeric(row, 'contactedLeads'), opportunities: numeric(row, 'opportunities'), quotes: numeric(row, 'quotes'), deals: numeric(row, 'deals'),
       dateStart: toDate(get(row, 'dateStart') || get(row, 'date')), dateEnd: toDate(get(row, 'dateEnd') || get(row, 'date')), sourceFile: fileName, sourceSheet: sheetName,
       availableMetrics, sourceRows, sourceRaw
     });
@@ -245,10 +275,24 @@ export function parseAdWorkbook(workbook, fileName = '') {
   return all;
 }
 
-export async function importAdFiles(files) {
+export async function previewAdFiles(files) {
   const parsed = await Promise.all([...files].map(async file => {
     const sheets = await readWorkbookSheets(file);
-    return sheets.flatMap(sheet => parseAdRows(sheet.rows, file.name, sheet.name));
+    return sheets.map(sheet => previewAdRows(sheet.rows, file.name, sheet.name));
   }));
-  return parsed.flat();
+  const sheets = parsed.flat();
+  return {
+    sheets,
+    recognisedColumns: sheets.reduce((total, sheet) => total + sheet.recognisedColumns, 0),
+    confirmedColumns: sheets.reduce((total, sheet) => total + sheet.confirmedColumns, 0)
+  };
+}
+
+export function parseAdImportPreview(preview, overrides = {}) {
+  return (preview?.sheets || []).flatMap(sheet => parseAdRows(sheet.rows, sheet.fileName, sheet.sheetName, { mapping: sheet.mapping, overrides }));
+}
+
+export async function importAdFiles(files, options = {}) {
+  const preview = await previewAdFiles(files);
+  return parseAdImportPreview(preview, options.overrides || {});
 }

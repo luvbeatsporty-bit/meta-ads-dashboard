@@ -1,5 +1,6 @@
 import { BUSINESS_MODE, DEFAULT_COMMERCE_RULES, DEFAULT_RULES, LEAD_FIELDS, createAdRecord } from './data-model.js';
-import { importAdFiles } from './excel-import.js';
+import { parseAdImportPreview, previewAdFiles } from './excel-import.js';
+import { applyMappingOverrides, getMetricLabel, mappingConfidenceLabel } from './field-mapper.js';
 import { readLeadFiles, suggestedMapping, mapLeadFiles, matchLeadsToAds } from './lead-import.js';
 import { money, integer, pct, esc, titleText, sumAds, summarise, diagnosticGroups, leadMetrics, classifyLead, averageFrequency, frequencySignals } from './metrics.js';
 import { diagnose, RISK_ORDER } from './diagnosis.js';
@@ -50,6 +51,7 @@ const state = {
   commerceTrendMetric: 'spend',
   commerceStopHits: {},
   pendingLeadFiles: [],
+  pendingAdImport: null,
   source: '未导入',
   commerceSource: '未导入',
   adviceFilter: 'all',
@@ -960,30 +962,122 @@ function recognisedFieldCount(ads = []) {
   return fields.size;
 }
 
-async function importAds(files) {
-  const selected = [...files];
-  if (selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) { toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。'); return; }
-  const usable = selected.filter(file => /\.(xlsx|csv)$/i.test(file.name));
-  if (!usable.length) { toast('请选择 .xlsx 或 .csv 格式的广告报表。'); return; }
-  markDataChanged();
-  const ads = await importAdFiles(usable);
-  if (!ads.length) {
-    toast('未识别到可支持的 Meta 广告字段，请检查文件表头。');
+function mappingPreviewModal() { return $('adImportMappingModal'); }
+
+function previewNeedsReview(preview) {
+  return preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'));
+}
+
+function pendingImportOverrides() {
+  const modal = mappingPreviewModal();
+  return Object.fromEntries([...modal.querySelectorAll('[data-ad-import-map]')].map(select => [select.dataset.adImportMap, select.value]));
+}
+
+function renderAdImportMappingPreview() {
+  const pending = state.pendingAdImport;
+  if (!pending) return;
+  const modal = mappingPreviewModal();
+  const rows = pending.preview.sheets.flatMap(sheet => sheet.mapping.map(item => ({ ...item, sheetName: sheet.sheetName })));
+  const confirmed = rows.filter(item => item.status === 'confirmed');
+  const review = rows.filter(item => item.status === 'needs_confirmation');
+  const unused = rows.filter(item => item.status === 'unused');
+  $('adImportMappingSummary').textContent = `已识别 ${confirmed.length} 个字段${review.length ? `；${review.length} 个字段需要确认` : ''}${unused.length ? `；${unused.length} 个未使用` : ''}。`;
+  const fieldRow = item => {
+    const options = ['<option value="ignore">不导入 / 未使用</option>', ...item.candidates.map(metric => `<option value="${esc(metric)}">${esc(getMetricLabel(metric))}</option>`)].join('');
+    const control = item.status === 'needs_confirmation'
+      ? `<select data-ad-import-map="${esc(item.id)}">${options}</select>`
+      : `<span class="ad-import-mapping-status ${esc(item.status)}">${item.status === 'confirmed' ? `${esc(getMetricLabel(item.canonicalMetric))} · ${esc(mappingConfidenceLabel(item.confidence))}` : '未使用'}</span>`;
+    return `<div class="ad-import-mapping-row"><div><b>${esc(item.sourceHeader || '（空表头）')}</b><small>${esc(item.sheetName)} · ${esc(item.matchType)}</small></div><div>${control}</div></div>`;
+  };
+  $('adImportMappingConfirmed').innerHTML = confirmed.length ? confirmed.map(fieldRow).join('') : '<div class="empty">暂未自动确认字段。</div>';
+  $('adImportMappingReview').innerHTML = review.length ? review.map(fieldRow).join('') : '<div class="mini-note">没有需要人工确认的歧义字段。</div>';
+  $('adImportMappingUnused').innerHTML = unused.length ? unused.map(fieldRow).join('') : '<div class="mini-note">没有未使用字段。</div>';
+  $('applyAdImportMappingButton').textContent = review.length ? '确认字段并导入' : '确认导入';
+  modal.classList.add('open');
+}
+
+async function beginAdImport(files, mode) {
+  const selected = [...(files || [])];
+  if (!selected.length) return;
+  const extensions = mode === BUSINESS_MODE.B2C_ECOMMERCE ? /\.(xlsx|xls|csv)$/i : /\.(xlsx|csv)$/i;
+  if (mode === BUSINESS_MODE.B2B_LEAD && selected.some(file => /\.xls$/i.test(file.name) && !/\.xlsx$/i.test(file.name))) {
+    toast('旧版 .xls 文件请先另存为 .xlsx 或 CSV 后再导入。');
     return;
   }
-  state.ads = ads;
-  state.leads = [];
-  state.matches = [];
-  state.source = 'Meta Excel';
-  populateFilters();
-  dateRange();
-  recordCommerceDiagnosticPass();
-  const saved = await persistImportedData();
-  resetExpandedLists();
-  resetDetailCharts();
-  renderDashboard();
-  toast(`已导入 ${ads.length} 条广告记录，识别到 ${recognisedFieldCount(ads)} 个可分析字段${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  const usable = selected.filter(file => extensions.test(file.name));
+  if (!usable.length) {
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：仅支持 .xlsx、.xls 或 .csv 文件。' : '请选择 .xlsx 或 .csv 格式的广告报表。');
+    return;
+  }
+  if (usable.some(file => !file.size)) {
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：文件为空。' : '广告报表导入失败：文件为空。');
+    return;
+  }
+  try {
+    const preview = await previewAdFiles(usable);
+    if (!preview.confirmedColumns && !preview.sheets.some(sheet => sheet.mapping.some(item => item.status === 'needs_confirmation'))) {
+      toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：未识别到可支持的 Meta 广告字段，请检查文件表头。' : '未识别到可支持的 Meta 广告字段，请检查文件表头。');
+      return;
+    }
+    state.pendingAdImport = { mode, files: usable, preview };
+    renderAdImportMappingPreview();
+  } catch (error) {
+    console.error('广告报表字段识别失败', error);
+    toast(mode === BUSINESS_MODE.B2C_ECOMMERCE ? commerceImportErrorMessage(error) : `广告报表导入失败：${String(error?.message || '请检查文件格式和内容。')}`);
+  }
 }
+
+async function applyAdImportMapping() {
+  const pending = state.pendingAdImport;
+  if (!pending) return;
+  const overrides = pendingImportOverrides();
+  const effective = pending.preview.sheets.flatMap(sheet => applyMappingOverrides(sheet.mapping, overrides));
+  if (!effective.some(item => item.status === 'confirmed' && item.internalKey)) {
+    toast('请至少确认一个可导入的广告字段。');
+    return;
+  }
+  try {
+    const ads = parseAdImportPreview(pending.preview, overrides);
+    if (!ads.length) {
+      toast(pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? 'B2C 广告报表导入失败：没有可用数据记录。' : '广告报表导入失败：没有可用数据记录。');
+      return;
+    }
+    markDataChanged();
+    if (pending.mode === BUSINESS_MODE.B2C_ECOMMERCE) {
+      state.commerceAds = ads;
+      state.commerceSource = `B2C Meta ${pending.files.every(file => /\.csv$/i.test(file.name)) ? 'CSV' : 'Excel'}`;
+      resetCommerceViewState();
+    } else {
+      state.ads = ads;
+      state.leads = [];
+      state.matches = [];
+      state.source = 'Meta Excel';
+      resetExpandedLists();
+      resetDetailCharts();
+    }
+    populateFilters();
+    dateRange();
+    recordCommerceDiagnosticPass();
+    const saved = await persistImportedData();
+    mappingPreviewModal().classList.remove('open');
+    state.pendingAdImport = null;
+    renderDashboard();
+    const prefix = pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? ' 条 B2C 广告记录' : ' 条广告记录';
+    const mappedLabels = [...new Set(effective.filter(item => item.status === 'confirmed' && item.canonicalMetric).map(item => getMetricLabel(item.canonicalMetric)))];
+    const fieldResult = mappedLabels.length ? `；字段识别：${mappedLabels.slice(0, 8).join('、')}${mappedLabels.length > 8 ? '等' : ''}` : '';
+    toast(`已导入 ${ads.length}${prefix}，识别到 ${recognisedFieldCount(ads)} 个可分析字段${fieldResult}${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
+  } catch (error) {
+    console.error('广告报表导入失败', error);
+    toast(pending.mode === BUSINESS_MODE.B2C_ECOMMERCE ? commerceImportErrorMessage(error) : `广告报表导入失败：${String(error?.message || '请检查文件格式和内容。')}`);
+  }
+}
+
+function closeAdImportMappingPreview() {
+  mappingPreviewModal().classList.remove('open');
+  state.pendingAdImport = null;
+}
+
+async function importAds(files) { return beginAdImport(files, BUSINESS_MODE.B2B_LEAD); }
 
 function commerceImportErrorMessage(error) {
   const message = String(error?.message || '').trim();
@@ -992,39 +1086,7 @@ function commerceImportErrorMessage(error) {
   return `B2C 广告报表导入失败${message ? `：${message}` : '，请检查文件格式和内容。'}`;
 }
 
-async function importCommerceAds(files) {
-  const selected = [...(files || [])];
-  if (!selected.length) return;
-  const usable = selected.filter(file => /\.(xlsx|xls|csv)$/i.test(file.name));
-  if (!usable.length) {
-    toast('B2C 广告报表导入失败：仅支持 .xlsx、.xls 或 .csv 文件。');
-    return;
-  }
-  if (usable.some(file => !file.size)) {
-    toast('B2C 广告报表导入失败：文件为空。');
-    return;
-  }
-  try {
-    markDataChanged();
-    const ads = await importAdFiles(usable);
-    if (!ads.length) {
-      toast('B2C 广告报表导入失败：未识别到可支持的 Meta 广告字段，请检查文件表头。');
-      return;
-    }
-    state.commerceAds = ads;
-    state.commerceSource = `B2C Meta ${usable.every(file => /\.csv$/i.test(file.name)) ? 'CSV' : 'Excel'}`;
-    populateFilters();
-    dateRange();
-    recordCommerceDiagnosticPass();
-    const saved = await persistImportedData();
-    resetCommerceViewState();
-    renderDashboard();
-    toast(`已导入 ${ads.length} 条 B2C 广告记录，识别到 ${recognisedFieldCount(ads)} 个可分析字段${saved ? '，已保存在本机浏览器' : '；浏览器未能保存到本机'}`);
-  } catch (error) {
-    console.error('B2C 广告报表导入失败', error);
-    toast(commerceImportErrorMessage(error));
-  }
-}
+async function importCommerceAds(files) { return beginAdImport(files, BUSINESS_MODE.B2C_ECOMMERCE); }
 
 async function prepareLeads(files) {
   const selected = [...files];
@@ -1067,7 +1129,9 @@ function focusCampaign(country, campaign) {
 }
 
 function bindEvents() {
-  $('adFileInput').addEventListener('change', event => importAds(event.target.files));
+  $('adFileInput').addEventListener('change', async event => {
+    try { await importAds(event.target.files); } finally { event.target.value = ''; }
+  });
   const commerceFileInput = $('commerceFileInput');
   $('commerceUploadButton').addEventListener('click', () => {
     // Reset before opening the picker so selecting the same report after clearing data fires change again.
@@ -1105,7 +1169,7 @@ function bindEvents() {
   $('viewAllAdviceButton').addEventListener('click', () => { state.adviceFilter = 'all'; renderAdviceModal(); $('adviceModal').classList.add('open'); });
   $('closeAdvice').addEventListener('click', () => $('adviceModal').classList.remove('open'));
   $('closeCommerceDetail').addEventListener('click', closeCommerceDetail);
-  ['guideModal', 'mappingModal', 'adviceModal', 'commerceDetailModal'].forEach(id => $(id).addEventListener('click', event => {
+  ['guideModal', 'mappingModal', 'adImportMappingModal', 'adviceModal', 'commerceDetailModal'].forEach(id => $(id).addEventListener('click', event => {
     if (event.target === $(id)) $(id).classList.remove('open');
   }));
   $('adviceFilterBar').addEventListener('click', event => {
@@ -1124,6 +1188,9 @@ function bindEvents() {
     renderDashboard();
   });
   $('applyMappingButton').addEventListener('click', applyLeadMapping);
+  $('applyAdImportMappingButton').addEventListener('click', applyAdImportMapping);
+  $('cancelAdImportMappingButton').addEventListener('click', closeAdImportMappingPreview);
+  $('closeAdImportMapping').addEventListener('click', closeAdImportMappingPreview);
 
   $('adviceList').addEventListener('click', event => {
     const button = event.target.closest('[data-risk-filter]');
